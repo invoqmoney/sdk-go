@@ -6,6 +6,21 @@ invoices, simulate test payments, and fulfill orders from signed webhooks.
 Use this module only on your server. It accepts secret keys and must not be
 compiled into client-side applications.
 
+## Server SDKs
+
+Create invoices and verify webhooks from your backend in any of these languages — same REST API, same webhook signature. This repository is the Go SDK.
+
+| Language | Repository |
+| --- | --- |
+| Node.js | [github.com/invoqmoney/sdk-js](https://github.com/invoqmoney/sdk-js) (`@invoq/server`) |
+| Python | [github.com/invoqmoney/sdk-python](https://github.com/invoqmoney/sdk-python) |
+| PHP | [github.com/invoqmoney/sdk-php](https://github.com/invoqmoney/sdk-php) |
+| Go | **this repo** |
+| Rust | [github.com/invoqmoney/sdk-rust](https://github.com/invoqmoney/sdk-rust) |
+| Ruby | [github.com/invoqmoney/sdk-ruby](https://github.com/invoqmoney/sdk-ruby) |
+
+The browser side is the same for every backend: **`@invoq/checkout`** (JavaScript, in [github.com/invoqmoney/sdk-js](https://github.com/invoqmoney/sdk-js)) opens the in-page checkout modal for any frontend.
+
 ## Installation
 
 ```sh
