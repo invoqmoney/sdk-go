@@ -70,6 +70,16 @@ const (
 	InvoicePaidStatusSettled InvoicePaidStatus = "settled"
 )
 
+// MonitoringStatus is the server-computed state of the invoice's deposit-address monitoring window.
+type MonitoringStatus string
+
+const (
+	// MonitoringStatusActive means the invoice's deposit address is still being watched for payments.
+	MonitoringStatusActive MonitoringStatus = "active"
+	// MonitoringStatusEnded means the invoice's deposit address is no longer being watched.
+	MonitoringStatusEnded MonitoringStatus = "ended"
+)
+
 // APIErrorLocation is the location of a field-level API error.
 type APIErrorLocation string
 
@@ -112,6 +122,13 @@ type PublicInvoiceProject struct {
 	LogoURL *string `json:"logo_url"`
 }
 
+// PublicInvoiceTransfer is one confirmed inbound transfer credited to the invoice, part of the payer-facing receipt trail.
+type PublicInvoiceTransfer struct {
+	TxHash        string  `json:"tx_hash"`
+	Amount        string  `json:"amount"`
+	ExplorerTxURL *string `json:"explorer_tx_url"`
+}
+
 // Invoice is returned when creating an invoice.
 type Invoice struct {
 	ID                 string              `json:"id"`
@@ -124,7 +141,9 @@ type Invoice struct {
 	DepositAddress     *string             `json:"deposit_address"`
 	Status             InvoiceStatus       `json:"status"`
 	AmountDue          string              `json:"amount_due"`
+	AmountOverpaid     string              `json:"amount_overpaid"`
 	MonitoringEndsAt   *string             `json:"monitoring_ends_at"`
+	MonitoringStatus   *MonitoringStatus   `json:"monitoring_status"`
 	DirectOnchainRails []DirectOnchainRail `json:"direct_onchain_rails"`
 }
 
@@ -137,20 +156,23 @@ type TestPaymentInvoice struct {
 
 // PublicInvoice is returned when fetching an invoice by ID.
 type PublicInvoice struct {
-	ID                 string               `json:"id"`
-	Mode               InvoiceMode          `json:"mode"`
-	Amount             string               `json:"amount"`
-	Currency           InvoiceCurrency      `json:"currency"`
-	Description        *string              `json:"description"`
-	ReturnURL          *string              `json:"return_url"`
-	DepositAddress     *string              `json:"deposit_address"`
-	Status             InvoiceStatus        `json:"status"`
-	AmountDue          string               `json:"amount_due"`
-	MonitoringEndsAt   *string              `json:"monitoring_ends_at"`
-	DirectOnchainRails []DirectOnchainRail  `json:"direct_onchain_rails"`
-	AmountPaid         string               `json:"amount_paid"`
-	PaymentStatus      InvoicePaymentStatus `json:"payment_status"`
-	Project            PublicInvoiceProject `json:"project"`
+	ID                 string                  `json:"id"`
+	Mode               InvoiceMode             `json:"mode"`
+	Amount             string                  `json:"amount"`
+	Currency           InvoiceCurrency         `json:"currency"`
+	Description        *string                 `json:"description"`
+	ReturnURL          *string                 `json:"return_url"`
+	DepositAddress     *string                 `json:"deposit_address"`
+	Status             InvoiceStatus           `json:"status"`
+	AmountDue          string                  `json:"amount_due"`
+	AmountOverpaid     string                  `json:"amount_overpaid"`
+	MonitoringEndsAt   *string                 `json:"monitoring_ends_at"`
+	MonitoringStatus   *MonitoringStatus       `json:"monitoring_status"`
+	DirectOnchainRails []DirectOnchainRail     `json:"direct_onchain_rails"`
+	AmountPaid         string                  `json:"amount_paid"`
+	PaymentStatus      InvoicePaymentStatus    `json:"payment_status"`
+	Project            PublicInvoiceProject    `json:"project"`
+	Transfers          []PublicInvoiceTransfer `json:"transfers"`
 }
 
 // CreateInvoiceInput is the input for creating an invoice.

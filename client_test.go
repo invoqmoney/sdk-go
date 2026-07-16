@@ -148,6 +148,12 @@ func TestCreatesInvoicesWithNativeJSONAndAuthorizationHeaders(t *testing.T) {
 	if invoice.AmountDue != "149.000000000000000000" {
 		t.Fatalf("unexpected amount due: %s", invoice.AmountDue)
 	}
+	if invoice.AmountOverpaid != "0.000000000000000000" {
+		t.Fatalf("unexpected amount overpaid: %s", invoice.AmountOverpaid)
+	}
+	if invoice.MonitoringStatus != nil {
+		t.Fatalf("expected nil monitoring status, got %#v", invoice.MonitoringStatus)
+	}
 	if invoice.ReturnURL == nil || *invoice.ReturnURL != "https://merchant.test/thanks" {
 		t.Fatalf("unexpected return URL: %#v", invoice.ReturnURL)
 	}
@@ -225,6 +231,15 @@ func TestGetsInvoicesByID(t *testing.T) {
 	if invoice.Project.Name == nil || *invoice.Project.Name != "Test project" {
 		t.Fatalf("unexpected project: %#v", invoice.Project)
 	}
+	if invoice.AmountOverpaid != "0.000000000000000000" {
+		t.Fatalf("unexpected amount overpaid: %s", invoice.AmountOverpaid)
+	}
+	if invoice.MonitoringStatus != nil {
+		t.Fatalf("expected nil monitoring status, got %#v", invoice.MonitoringStatus)
+	}
+	if invoice.Transfers == nil || len(invoice.Transfers) != 0 {
+		t.Fatalf("expected empty transfers, got %#v", invoice.Transfers)
+	}
 	if request.Method != http.MethodGet {
 		t.Fatalf("unexpected method: %s", request.Method)
 	}
@@ -280,6 +295,12 @@ func TestCreatesTestPaymentsAndReturnsOnlyDataEnvelope(t *testing.T) {
 	}
 	if invoice.AmountDue != "0.000000000000000000" {
 		t.Fatalf("unexpected amount due: %s", invoice.AmountDue)
+	}
+	if invoice.AmountOverpaid != "0.000000000000000000" {
+		t.Fatalf("unexpected amount overpaid: %s", invoice.AmountOverpaid)
+	}
+	if invoice.MonitoringStatus != nil {
+		t.Fatalf("expected nil monitoring status, got %#v", invoice.MonitoringStatus)
 	}
 	if invoice.FullyPaidAt == nil {
 		t.Fatal("expected fully paid timestamp")
@@ -584,6 +605,55 @@ func TestNullDataEnvelopeReturnsSDKError(t *testing.T) {
 	}
 }
 
+func TestDecodesPublicInvoiceMonitoringStatusAndTransfers(t *testing.T) {
+	const raw = `{
+		"id":"inv_live_123",
+		"mode":"live",
+		"amount":"149",
+		"currency":"USD",
+		"description":null,
+		"return_url":null,
+		"project":{"id":"proj_live_123","name":"Live project","logo_url":null},
+		"deposit_address":"0xdeposit",
+		"status":"paid",
+		"amount_due":"0.000000000000000000",
+		"amount_overpaid":"5.000000000000000000",
+		"monitoring_ends_at":null,
+		"monitoring_status":"ended",
+		"amount_paid":"154.000000000000000000",
+		"payment_status":"paid",
+		"transfers":[
+			{"tx_hash":"0xhash1","amount":"149.000000000000000000","explorer_tx_url":"https://explorer.test/tx/0xhash1"},
+			{"tx_hash":"0xhash2","amount":"5.000000000000000000","explorer_tx_url":null}
+		],
+		"direct_onchain_rails":[]
+	}`
+
+	var invoice PublicInvoice
+	if err := json.Unmarshal([]byte(raw), &invoice); err != nil {
+		t.Fatal(err)
+	}
+
+	if invoice.AmountOverpaid != "5.000000000000000000" {
+		t.Fatalf("unexpected amount overpaid: %s", invoice.AmountOverpaid)
+	}
+	if invoice.MonitoringStatus == nil || *invoice.MonitoringStatus != MonitoringStatusEnded {
+		t.Fatalf("unexpected monitoring status: %#v", invoice.MonitoringStatus)
+	}
+	if len(invoice.Transfers) != 2 {
+		t.Fatalf("unexpected transfers length: %#v", invoice.Transfers)
+	}
+	if invoice.Transfers[0].TxHash != "0xhash1" || invoice.Transfers[0].Amount != "149.000000000000000000" {
+		t.Fatalf("unexpected first transfer: %#v", invoice.Transfers[0])
+	}
+	if invoice.Transfers[0].ExplorerTxURL == nil || *invoice.Transfers[0].ExplorerTxURL != "https://explorer.test/tx/0xhash1" {
+		t.Fatalf("unexpected first transfer explorer URL: %#v", invoice.Transfers[0].ExplorerTxURL)
+	}
+	if invoice.Transfers[1].ExplorerTxURL != nil {
+		t.Fatalf("expected nil explorer URL on second transfer, got %#v", invoice.Transfers[1].ExplorerTxURL)
+	}
+}
+
 func isSDKError(err error) bool {
 	var sdkError SDKError
 	return errors.As(err, &sdkError)
@@ -601,7 +671,9 @@ func secretInvoiceJSON(status string) string {
 		"deposit_address":null,
 		"status":"` + status + `",
 		"amount_due":"149.000000000000000000",
+		"amount_overpaid":"0.000000000000000000",
 		"monitoring_ends_at":null,
+		"monitoring_status":null,
 		"direct_onchain_rails":[]
 	}`
 }
@@ -618,9 +690,12 @@ func publicInvoiceJSON(status string) string {
 		"deposit_address":null,
 		"status":"` + status + `",
 		"amount_due":"149.000000000000000000",
+		"amount_overpaid":"0.000000000000000000",
 		"monitoring_ends_at":null,
+		"monitoring_status":null,
 		"amount_paid":"0",
 		"payment_status":"unpaid",
+		"transfers":[],
 		"direct_onchain_rails":[]
 	}`
 }
@@ -637,7 +712,9 @@ func testPaymentInvoiceJSON(status string) string {
 		"deposit_address":null,
 		"status":"` + status + `",
 		"amount_due":"0.000000000000000000",
+		"amount_overpaid":"0.000000000000000000",
 		"monitoring_ends_at":null,
+		"monitoring_status":null,
 		"amount_paid":"149",
 		"fully_paid_at":"2026-06-15T00:00:00.000Z",
 		"direct_onchain_rails":[]
