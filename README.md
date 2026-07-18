@@ -132,7 +132,7 @@ _ = invoice.ID
 Notes:
 
 - Use a server-side amount. Do not trust client-supplied amounts.
-- `amount` is a decimal USD string from `0.01` to `999.99` with up to 2 decimal
+- `amount` is a decimal USD string from `0.01` to `1000000.00` with up to 2 decimal
   places, such as `129` or `129.99`.
 - Use `reference_id` to map `invoice.paid` webhooks back to your order. It also
   makes creation retry-safe: creating again with the same `reference_id` and the

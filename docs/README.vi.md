@@ -125,7 +125,7 @@ _ = invoice.ID
 Lưu ý:
 
 - Số tiền phải do máy chủ quyết định. Đừng tin số tiền phía client gửi lên.
-- `amount` là chuỗi thập phân USD từ `0.01` đến `999.99`, tối đa 2 chữ số lẻ, ví dụ `129` hoặc `129.99`.
+- `amount` là chuỗi thập phân USD từ `0.01` đến `1000000.00`, tối đa 2 chữ số lẻ, ví dụ `129` hoặc `129.99`.
 - Dùng `reference_id` để nối webhook `invoice.paid` về đúng đơn hàng của bạn. Nó cũng giúp thao tác tạo an toàn khi thử lại: tạo lại với cùng `reference_id` và cùng nội dung hóa đơn sẽ trả về hóa đơn đã có thay vì tạo trùng; nếu nội dung khác nhau, API sẽ báo lỗi `409 reference_id_conflict`.
 - Dùng `invoq.String(...)` cho các chuỗi tùy chọn trong request. Dùng `invoq.StringOrNull(...)` để đặt `return_url`, dùng `invoq.NullString()` để gửi giá trị `null` trong JSON, và bỏ trống trường đó để không gửi nó đi.
 

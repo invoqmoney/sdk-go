@@ -125,7 +125,7 @@ _ = invoice.ID
 說明：
 
 - 金額要由伺服器端決定，不要相信用戶端傳來的金額。
-- `amount` 是 `0.01` 到 `999.99` 之間的十進位美元字串，最多兩位小數，例如 `129` 或 `129.99`。
+- `amount` 是 `0.01` 到 `1000000.00` 之間的十進位美元字串，最多兩位小數，例如 `129` 或 `129.99`。
 - 用 `reference_id` 把 `invoice.paid` webhook 對應回你的訂單。它也讓建立動作可以放心重試：用相同的 `reference_id` 和相同的帳單條件再建立一次，回傳的是既有帳單而不是重複開單；條件不同則會回 `409 reference_id_conflict` API 錯誤。
 - 可選的請求字串用 `invoq.String(...)`；用 `invoq.StringOrNull(...)` 設定 `return_url`，用 `invoq.NullString()` 送出 JSON `null`，不設定該欄位則會將其省略。
 

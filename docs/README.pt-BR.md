@@ -125,7 +125,7 @@ _ = invoice.ID
 Notas:
 
 - Defina o valor no servidor. Não confie em valores vindos do cliente.
-- `amount` é uma string decimal em USD de `0.01` a `999.99`, com até 2 casas decimais, como `129` ou `129.99`.
+- `amount` é uma string decimal em USD de `0.01` a `1000000.00`, com até 2 casas decimais, como `129` ou `129.99`.
 - Use o `reference_id` para ligar os webhooks `invoice.paid` ao seu pedido. Ele também deixa a criação segura para repetir: se você criar de novo com o mesmo `reference_id` e os mesmos termos, recebe a fatura existente em vez de uma duplicata; com termos diferentes, a chamada falha com o erro de API `409 reference_id_conflict`.
 - Use `invoq.String(...)` para strings opcionais da requisição. Use `invoq.StringOrNull(...)` para definir `return_url`, `invoq.NullString()` para enviar `null` em JSON e deixe o campo sem definir para omiti-lo.
 

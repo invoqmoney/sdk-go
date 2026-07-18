@@ -125,7 +125,7 @@ _ = invoice.ID
 Catatan:
 
 - Tentukan jumlahnya di sisi server. Jangan percaya jumlah yang dikirim klien.
-- `amount` adalah string desimal USD dari `0.01` sampai `999.99` dengan maksimal 2 angka di belakang koma, misalnya `129` atau `129.99`.
+- `amount` adalah string desimal USD dari `0.01` sampai `1000000.00` dengan maksimal 2 angka di belakang koma, misalnya `129` atau `129.99`.
 - Pakai `reference_id` untuk memetakan webhook `invoice.paid` kembali ke pesanan Anda. Ini juga membuat pembuatan invoice aman diulang: membuat lagi dengan `reference_id` yang sama dan ketentuan invoice yang sama mengembalikan invoice yang sudah ada, bukan duplikat, sementara ketentuan yang berbeda gagal dengan error API `409 reference_id_conflict`.
 - Pakai `invoq.String(...)` untuk string request yang opsional. Pakai `invoq.StringOrNull(...)` untuk mengisi `return_url`, `invoq.NullString()` untuk mengirim JSON `null`, dan biarkan field-nya tidak diisi untuk menghilangkannya.
 
