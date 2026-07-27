@@ -41,6 +41,9 @@ Requires Go 1.22 or newer.
 3. In your project's **webhooks** settings, save your webhook URL. The webhook
    secret (`whsec_...`) for that mode is shown once when you first enable the
    webhook, so store it right away. Webhook URLs must be public HTTPS URLs.
+4. Set up your **Receiving wallet** before going live. Test invoices don't need
+   one; a live invoice with nowhere to settle fails with
+   `409 no_payment_options_available`.
 
 Add both to your server environment:
 
@@ -117,7 +120,6 @@ ctx := context.Background()
 
 invoice, err := client.Invoices.Create(ctx, invoq.CreateInvoiceInput{
 	Amount:      "129",
-	Currency:    invoq.InvoiceCurrencyUSD,
 	Description: invoq.String("SaaS boilerplate"),
 	ReferenceID: invoq.String("order_1234"),
 	ReturnURL:   invoq.StringOrNull("https://merchant.example/thanks"),
@@ -133,7 +135,8 @@ Notes:
 
 - Use a server-side amount. Do not trust client-supplied amounts.
 - `amount` is a decimal USD string from `0.01` to `1000000.00` with up to 2 decimal
-  places, such as `129` or `129.99`.
+  places, such as `129` or `129.99`. Currency is always USD, and test or live
+  comes from the key — neither is a request field.
 - Use `reference_id` to map `invoice.paid` webhooks back to your order. It also
   makes creation retry-safe: creating again with the same `reference_id` and the
   same invoice terms returns the existing invoice instead of a duplicate, while
@@ -174,8 +177,7 @@ allowed and produce `partially_paid`.
 
 To receive webhooks on your machine, expose your local server with an HTTPS
 tunnel such as ngrok or cloudflared and save the tunnel URL as your test webhook
-URL in the dashboard. The dashboard can also send a signed `webhook.ping` to
-check connectivity.
+URL in the dashboard.
 
 ## Webhooks
 
@@ -217,13 +219,21 @@ func handleWebhook(response http.ResponseWriter, request *http.Request) {
 
 Use `invoice.paid` webhooks to fulfill orders on your server. When
 `IsInvoicePaid(event)` is true, the invoice is ready for automatic fulfillment;
-its status is `paid`, `settling`, or `settled`. A `review_required` invoice does
-not emit an `invoice.paid` webhook yet. Wait for a later `invoice.paid` webhook
-after review is approved.
+its status is `paid`, `settling`, or `settled`. A `review_required` invoice emits
+no `invoice.paid` until the review clears.
 
-Failed deliveries are retried, so fulfill idempotently by `reference_id` or
-invoice `id` and make repeat deliveries a no-op. Respond with a 2xx quickly; any
-other status counts as a failed delivery.
+invoq also sends `invoice.payment_reversed` when a previously paid invoice drops
+back below its amount — a chain reorg dropping a confirmed transfer, for example.
+Catch it with `invoq.IsInvoicePaymentReversed(event)`, decode it with
+`invoq.AsInvoicePaymentReversedEvent(event)`, and hold or reverse the fulfillment
+according to your own policy.
+
+Failed deliveries are retried (up to 5 attempts, backing off 1 minute, 5 minutes,
+30 minutes, then 2 hours), so fulfill idempotently by `reference_id` or invoice
+`id` and make repeat deliveries a no-op. Deliveries can also arrive out of order
+— keep the snapshot with the highest `payment_revision`. Respond with a 2xx
+quickly; any other status counts as a failed delivery and is retried, including
+redirects and `4xx`.
 
 `VerifyWebhook` accepts `http.Header`. Use `VerifyWebhookWithSignature` when you
 already have the `invoq-signature` header value.
@@ -272,8 +282,7 @@ client, err := invoq.New(apiKey,
 ```
 
 - `client.Invoices.Create(ctx, input)` creates an invoice. `input`: `Amount`
-  (required), `Currency` (`InvoiceCurrencyUSD`, default), `Description`,
-  `ReferenceID`, `ReturnURL`.
+  (required), `Description`, `ReferenceID`, `ReturnURL`.
 - `client.Invoices.Get(ctx, invoiceID)` fetches a public invoice and returns
   `*invoq.PublicInvoice`.
 - `client.Invoices.CreateTestPayment(ctx, invoiceID, input)` simulates payment
@@ -281,7 +290,40 @@ client, err := invoq.New(apiKey,
 - `invoq.VerifyWebhook(rawBody, headers, webhookSecret)` verifies a webhook and
   returns `invoq.WebhookEvent`.
 - `invoq.IsInvoicePaid(event)` and `invoq.AsInvoicePaidEvent(event)` identify
-  typed `invoice.paid` events.
+  typed `invoice.paid` events; `invoq.IsInvoicePaymentReversed(event)` and
+  `invoq.AsInvoicePaymentReversedEvent(event)` do the same for
+  `invoice.payment_reversed`. Both fail on a malformed event, and an event type
+  this SDK version does not model still verifies and is returned as-is.
 - The SDK detects its Go module version from build info for the `User-Agent`.
   Released tags such as `v0.1.0` are sent without the `v` prefix; local source
   builds without a module version use `unknown`.
+
+`Invoices.Get` returns the public invoice shape from the hosted checkout
+endpoint: the create shape plus `Project`, `AmountPaid`, and `Transfers`, minus
+`ReferenceID`. Use the create response or the `invoice.paid` webhook when you
+need your merchant `reference_id`.
+
+Two status fields. `Status` is the accounting one — `unpaid`, `partially_paid`,
+`paid`, `settling`, `settled`, `review_required` — where the three paid-like
+values differ only in how far the funds have moved to your wallet.
+`CheckoutStatus` is payer-facing — `open`, `confirming`, `expired`, `paid`,
+`unavailable` — and never authorizes fulfillment. `PaymentRevision` increments
+whenever the confirmed payment set changes, so you can discard a snapshot older
+than one you already hold.
+
+Amounts in responses are normalized to 4 decimal places: create with `129` and
+the invoice returns `Amount` `129.0000`. Compare amounts numerically, not as
+strings. `AmountDue` is derived as `max(amount - amount_paid, 0)` and uses the
+same 18-decimal scale as `AmountPaid`; `AmountOverpaid` is its mirror,
+`max(amount_paid - amount, 0)`, so you never subtract money yourself.
+
+`PaymentOptions` holds the payment instructions, fixed at creation and empty in
+test mode. Entries are discriminated by `Status`, then `CollectionMethod`: only
+`ready` is payable, `evm_deposit` carries `DepositAddress` and `SuggestedAmount`,
+`direct_exact` carries `RecipientAddress` and an `ExactAmount` the buyer must
+send to the digit. Those instruction fields are `nil` on every other entry, and
+an option's identity is `(ChainNamespace, ChainReference, TokenAddress)`, never
+its position in the slice. `Transfers` is the confirmed receipt trail —
+`TransactionID`, `EventIndex`, `Amount`, `ExplorerTransactionURL` — and stays
+empty until a payment confirms. Full field reference:
+[REST API docs](https://github.com/invoqmoney/api).

@@ -36,6 +36,7 @@ Membutuhkan Go 1.22 atau lebih baru.
 1. Masuk ke [dashboard invoq](https://app.invoq.money) dan buat sebuah proyek.
 2. Di halaman **API keys**, buat kunci rahasia (secret key). Kunci uji coba diawali `sk_test_`, kunci produksi diawali `sk_live_`. Mode kuncinya menentukan apakah invoice yang dibuat itu uji coba atau produksi.
 3. Di pengaturan **webhooks** proyek Anda, simpan URL webhook Anda. Kunci rahasia webhook (`whsec_...`) untuk mode itu hanya ditampilkan sekali, saat webhook pertama kali diaktifkan — langsung simpan. URL webhook harus berupa URL HTTPS yang bisa diakses publik.
+4. Siapkan **Receiving wallet** Anda sebelum go live. Invoice uji coba tidak membutuhkannya; invoice live tanpa tujuan penyelesaian gagal dengan `409 no_payment_options_available`.
 
 Tambahkan keduanya ke lingkungan server Anda:
 
@@ -110,7 +111,6 @@ ctx := context.Background()
 
 invoice, err := client.Invoices.Create(ctx, invoq.CreateInvoiceInput{
 	Amount:      "129",
-	Currency:    invoq.InvoiceCurrencyUSD,
 	Description: invoq.String("SaaS boilerplate"),
 	ReferenceID: invoq.String("order_1234"),
 	ReturnURL:   invoq.StringOrNull("https://merchant.example/thanks"),
@@ -125,7 +125,7 @@ _ = invoice.ID
 Catatan:
 
 - Tentukan jumlahnya di sisi server. Jangan percaya jumlah yang dikirim klien.
-- `amount` adalah string desimal USD dari `0.01` sampai `1000000.00` dengan maksimal 2 angka di belakang koma, misalnya `129` atau `129.99`.
+- `amount` adalah string desimal USD dari `0.01` sampai `1000000.00` dengan maksimal 2 angka di belakang koma, misalnya `129` atau `129.99`. Mata uangnya selalu USD, dan mode uji coba atau live ditentukan oleh kuncinya — keduanya bukan field permintaan.
 - Pakai `reference_id` untuk memetakan webhook `invoice.paid` kembali ke pesanan Anda. Ini juga membuat pembuatan invoice aman diulang: membuat lagi dengan `reference_id` yang sama dan ketentuan invoice yang sama mengembalikan invoice yang sudah ada, bukan duplikat, sementara ketentuan yang berbeda gagal dengan error API `409 reference_id_conflict`.
 - Pakai `invoq.String(...)` untuk string request yang opsional. Pakai `invoq.StringOrNull(...)` untuk mengisi `return_url`, `invoq.NullString()` untuk mengirim JSON `null`, dan biarkan field-nya tidak diisi untuk menghilangkannya.
 
@@ -154,7 +154,7 @@ _ = paidInvoice.Status // invoq.InvoiceStatusPaid saat dibayar penuh
 
 `CreateTestPayment` hanya bekerja pada invoice yang dibuat dengan kunci `sk_test_`. Begitu pembayaran mencapai jumlah invoice, invoice menjadi `paid` dan invoq mengirim webhook `invoice.paid` bertanda tangan sungguhan ke URL webhook uji coba Anda. Jumlah parsial diperbolehkan dan menghasilkan `partially_paid`.
 
-Untuk menerima webhook di mesin Anda sendiri, buka server lokal lewat tunnel HTTPS seperti ngrok atau cloudflared, lalu simpan URL tunnel-nya sebagai URL webhook uji coba di dashboard. Dashboard juga bisa mengirim `webhook.ping` bertanda tangan untuk mengecek koneksi.
+Untuk menerima webhook di mesin Anda sendiri, buka server lokal lewat tunnel HTTPS seperti ngrok atau cloudflared, lalu simpan URL tunnel-nya sebagai URL webhook uji coba di dashboard.
 
 ## Webhook
 
@@ -193,9 +193,11 @@ func handleWebhook(response http.ResponseWriter, request *http.Request) {
 }
 ```
 
-Gunakan webhook `invoice.paid` untuk memproses pesanan di server Anda. Saat `IsInvoicePaid(event)` bernilai true, invoice siap diproses otomatis; statusnya `paid`, `settling`, atau `settled`. Invoice dengan status `review_required` belum mengirim webhook `invoice.paid`. Tunggu webhook `invoice.paid` berikutnya setelah peninjauan disetujui.
+Gunakan webhook `invoice.paid` untuk memproses pesanan di server Anda. Saat `IsInvoicePaid(event)` bernilai true, invoice siap diproses otomatis; statusnya `paid`, `settling`, atau `settled`. Invoice dengan status `review_required` tidak mengirim `invoice.paid` sampai peninjauannya selesai.
 
-Pengiriman yang gagal akan diulang, jadi proses pesanan secara idempoten berdasarkan `reference_id` atau `id` invoice dan abaikan kiriman ulang. Balas 2xx secepatnya; status lain dihitung sebagai pengiriman gagal.
+invoq juga mengirim `invoice.payment_reversed` ketika invoice yang tadinya lunas turun lagi di bawah jumlahnya — misalnya karena reorg rantai membatalkan transfer yang sudah terkonfirmasi. Tangkap event itu dengan `invoq.IsInvoicePaymentReversed(event)`, dekode dengan `invoq.AsInvoicePaymentReversedEvent(event)`, lalu tahan atau batalkan pemrosesan sesuai kebijakan Anda sendiri.
+
+Pengiriman yang gagal akan diulang (sampai 5 kali, dengan jeda 1 menit, 5 menit, 30 menit, lalu 2 jam), jadi proses pesanan secara idempoten berdasarkan `reference_id` atau `id` invoice dan abaikan kiriman ulang. Urutan kedatangannya juga tidak dijamin — simpan snapshot dengan `payment_revision` tertinggi. Balas 2xx secepatnya; status lain dihitung sebagai pengiriman gagal dan akan diulang, termasuk redirect dan `4xx`.
 
 `VerifyWebhook` menerima `http.Header`. Pakai `VerifyWebhookWithSignature` kalau Anda sudah punya nilai header `invoq-signature`.
 
@@ -236,9 +238,17 @@ client, err := invoq.New(apiKey,
 )
 ```
 
-- `client.Invoices.Create(ctx, input)` membuat invoice. `input`: `Amount` (wajib), `Currency` (`InvoiceCurrencyUSD`, bawaan), `Description`, `ReferenceID`, `ReturnURL`.
+- `client.Invoices.Create(ctx, input)` membuat invoice. `input`: `Amount` (wajib), `Description`, `ReferenceID`, `ReturnURL`.
 - `client.Invoices.Get(ctx, invoiceID)` mengambil invoice publik dan mengembalikan `*invoq.PublicInvoice`.
 - `client.Invoices.CreateTestPayment(ctx, invoiceID, input)` menyimulasikan pembayaran pada invoice uji coba dan mengembalikan `*invoq.TestPaymentInvoice`.
 - `invoq.VerifyWebhook(rawBody, headers, webhookSecret)` memverifikasi webhook dan mengembalikan `invoq.WebhookEvent`.
-- `invoq.IsInvoicePaid(event)` dan `invoq.AsInvoicePaidEvent(event)` mengidentifikasi event `invoice.paid` yang bertipe.
+- `invoq.IsInvoicePaid(event)` dan `invoq.AsInvoicePaidEvent(event)` mengidentifikasi event `invoice.paid` yang bertipe. `invoq.IsInvoicePaymentReversed(event)` dan `invoq.AsInvoicePaymentReversedEvent(event)` melakukan hal yang sama untuk `invoice.payment_reversed`. Keduanya menolak event yang bentuknya tidak sesuai; tipe event yang belum dikenal versi SDK ini tetap lolos verifikasi dan dikembalikan apa adanya.
 - SDK mendeteksi versi modul Go-nya dari informasi build untuk `User-Agent`. Tag rilis seperti `v0.1.0` dikirim tanpa awalan `v`; build dari sumber lokal tanpa versi modul memakai `unknown`.
+
+`Invoices.Get` mengembalikan bentuk invoice publik yang dipakai halaman checkout ter-hosting: bentuk respons pembuatan ditambah `AmountPaid`, `Project`, dan `Transfers`, dikurangi `ReferenceID`. Gunakan respons pembuatan atau webhook `invoice.paid` saat Anda membutuhkan `reference_id` merchant.
+
+Dua field status. `Status` adalah status pembukuan — `unpaid`, `partially_paid`, `paid`, `settling`, `settled`, `review_required` — dan tiga nilai yang berarti sudah dibayar hanya berbeda pada seberapa jauh dananya bergerak ke dompet Anda. `CheckoutStatus` adalah status yang dilihat pembayar — `open`, `confirming`, `expired`, `paid`, `unavailable` — dan tidak pernah menjadi izin memproses pesanan. `PaymentRevision` naik setiap kali kumpulan pembayaran terkonfirmasi berubah, jadi Anda bisa membuang snapshot yang lebih lama dari yang sudah Anda pegang.
+
+Jumlah di respons dinormalkan ke 4 angka desimal: buat dengan `129` dan invoice mengembalikan `Amount` `129.0000`. Bandingkan jumlah secara numerik, bukan sebagai string. `AmountDue` diturunkan sebagai `max(amount - amount_paid, 0)` dan memakai skala 18 desimal yang sama dengan `AmountPaid`; `AmountOverpaid` adalah kebalikannya, `max(amount_paid - amount, 0)`, jadi Anda tidak perlu mengurangkannya sendiri.
+
+`PaymentOptions` berisi instruksi pembayarannya, ditetapkan saat pembuatan dan `[]` di mode uji coba. Tiap entri dibedakan oleh `Status`, lalu `CollectionMethod`: hanya `ready` yang bisa dibayar, `evm_deposit` membawa `DepositAddress` dan `SuggestedAmount`, `direct_exact` membawa `RecipientAddress` dan `ExactAmount` yang harus dikirim pembeli persis sampai digit terakhir. Field instruksi itu bernilai `nil` pada entri lainnya, dan identitas sebuah opsi adalah `(ChainNamespace, ChainReference, TokenAddress)`, bukan posisinya di dalam slice. `Transfers` adalah jejak penerimaan terkonfirmasi — `TransactionID`, `EventIndex`, `Amount`, `ExplorerTransactionURL` — dan tetap `[]` sampai ada pembayaran yang terkonfirmasi. Referensi field lengkap: [dokumen REST API](https://github.com/invoqmoney/api).

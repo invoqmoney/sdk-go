@@ -130,7 +130,6 @@ func TestCreatesInvoicesWithNativeJSONAndAuthorizationHeaders(t *testing.T) {
 
 	invoice, err := client.Invoices.Create(context.Background(), CreateInvoiceInput{
 		Amount:      "149",
-		Currency:    InvoiceCurrencyUSD,
 		Description: String("Test order"),
 		ReferenceID: String("order_123"),
 		ReturnURL:   StringOrNull("https://merchant.test/thanks"),
@@ -145,14 +144,23 @@ func TestCreatesInvoicesWithNativeJSONAndAuthorizationHeaders(t *testing.T) {
 	if invoice.ID != "inv_test_123" {
 		t.Fatalf("unexpected invoice ID: %s", invoice.ID)
 	}
+	if invoice.CheckoutStatus != CheckoutStatusUnavailable {
+		t.Fatalf("unexpected checkout status: %s", invoice.CheckoutStatus)
+	}
+	if invoice.PaymentRevision != 0 {
+		t.Fatalf("unexpected payment revision: %d", invoice.PaymentRevision)
+	}
 	if invoice.AmountDue != "149.000000000000000000" {
 		t.Fatalf("unexpected amount due: %s", invoice.AmountDue)
 	}
 	if invoice.AmountOverpaid != "0.000000000000000000" {
 		t.Fatalf("unexpected amount overpaid: %s", invoice.AmountOverpaid)
 	}
-	if invoice.MonitoringStatus != nil {
-		t.Fatalf("expected nil monitoring status, got %#v", invoice.MonitoringStatus)
+	if invoice.MonitoringEndsAt != nil {
+		t.Fatalf("expected nil monitoring end, got %#v", invoice.MonitoringEndsAt)
+	}
+	if invoice.PaymentOptions == nil || len(invoice.PaymentOptions) != 0 {
+		t.Fatalf("expected empty payment options, got %#v", invoice.PaymentOptions)
 	}
 	if invoice.ReturnURL == nil || *invoice.ReturnURL != "https://merchant.test/thanks" {
 		t.Fatalf("unexpected return URL: %#v", invoice.ReturnURL)
@@ -183,13 +191,43 @@ func TestCreatesInvoicesWithNativeJSONAndAuthorizationHeaders(t *testing.T) {
 
 	expected := map[string]any{
 		"amount":       "149",
-		"currency":     "USD",
 		"description":  "Test order",
 		"reference_id": "order_123",
 		"return_url":   "https://merchant.test/thanks",
 	}
 	if !reflect.DeepEqual(payload, expected) {
 		t.Fatalf("unexpected request body: %#v", payload)
+	}
+}
+
+func TestCreateInvoiceBodyCarriesOnlyTheFourContractFields(t *testing.T) {
+	// The create schema is strict: any other key, currency above all, fails the
+	// whole request with 400 invalid_request and fields[].code "unknown_field".
+	// A field on this struct is a field a caller can set, so the guard is that
+	// the struct has no other field at all, not that the SDK skips it.
+	jsonNames := make([]string, 0, 4)
+	for _, field := range reflect.VisibleFields(reflect.TypeOf(CreateInvoiceInput{})) {
+		name, _, _ := strings.Cut(field.Tag.Get("json"), ",")
+		jsonNames = append(jsonNames, name)
+	}
+
+	if !reflect.DeepEqual(jsonNames, []string{"amount", "description", "reference_id", "return_url"}) {
+		t.Fatalf("unexpected create invoice body fields: %#v", jsonNames)
+	}
+
+	body, err := json.Marshal(CreateInvoiceInput{
+		Amount:      "149",
+		Description: String("Test order"),
+		ReferenceID: String("order_123"),
+		ReturnURL:   StringOrNull("https://merchant.test/thanks"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	const expected = `{"amount":"149","description":"Test order","reference_id":"order_123","return_url":"https://merchant.test/thanks"}`
+	if string(body) != expected {
+		t.Fatalf("unexpected create invoice body: %s", string(body))
 	}
 }
 
@@ -225,8 +263,11 @@ func TestGetsInvoicesByID(t *testing.T) {
 	if invoice.ID != "inv_test_123" {
 		t.Fatalf("unexpected invoice ID: %s", invoice.ID)
 	}
-	if invoice.PaymentStatus != InvoicePaymentStatusUnpaid {
-		t.Fatalf("unexpected payment status: %s", invoice.PaymentStatus)
+	if invoice.CheckoutStatus != CheckoutStatusUnavailable {
+		t.Fatalf("unexpected checkout status: %s", invoice.CheckoutStatus)
+	}
+	if invoice.PaymentRevision != 0 {
+		t.Fatalf("unexpected payment revision: %d", invoice.PaymentRevision)
 	}
 	if invoice.Project.Name == nil || *invoice.Project.Name != "Test project" {
 		t.Fatalf("unexpected project: %#v", invoice.Project)
@@ -234,11 +275,11 @@ func TestGetsInvoicesByID(t *testing.T) {
 	if invoice.AmountOverpaid != "0.000000000000000000" {
 		t.Fatalf("unexpected amount overpaid: %s", invoice.AmountOverpaid)
 	}
-	if invoice.MonitoringStatus != nil {
-		t.Fatalf("expected nil monitoring status, got %#v", invoice.MonitoringStatus)
-	}
 	if invoice.Transfers == nil || len(invoice.Transfers) != 0 {
 		t.Fatalf("expected empty transfers, got %#v", invoice.Transfers)
+	}
+	if invoice.PaymentOptions == nil || len(invoice.PaymentOptions) != 0 {
+		t.Fatalf("expected empty payment options, got %#v", invoice.PaymentOptions)
 	}
 	if request.Method != http.MethodGet {
 		t.Fatalf("unexpected method: %s", request.Method)
@@ -287,10 +328,10 @@ func TestCreatesTestPaymentsAndReturnsOnlyDataEnvelope(t *testing.T) {
 	request := <-received
 	body := <-receivedBody
 
-	if invoice.Status != "paid" {
+	if invoice.Status != InvoiceStatusPaid {
 		t.Fatalf("unexpected invoice status: %s", invoice.Status)
 	}
-	if invoice.AmountPaid != "149" {
+	if invoice.AmountPaid != "149.000000000000000000" {
 		t.Fatalf("unexpected amount paid: %s", invoice.AmountPaid)
 	}
 	if invoice.AmountDue != "0.000000000000000000" {
@@ -299,8 +340,8 @@ func TestCreatesTestPaymentsAndReturnsOnlyDataEnvelope(t *testing.T) {
 	if invoice.AmountOverpaid != "0.000000000000000000" {
 		t.Fatalf("unexpected amount overpaid: %s", invoice.AmountOverpaid)
 	}
-	if invoice.MonitoringStatus != nil {
-		t.Fatalf("expected nil monitoring status, got %#v", invoice.MonitoringStatus)
+	if invoice.PaymentRevision != 1 {
+		t.Fatalf("unexpected payment revision: %d", invoice.PaymentRevision)
 	}
 	if invoice.FullyPaidAt == nil {
 		t.Fatal("expected fully paid timestamp")
@@ -605,28 +646,123 @@ func TestNullDataEnvelopeReturnsSDKError(t *testing.T) {
 	}
 }
 
-func TestDecodesPublicInvoiceMonitoringStatusAndTransfers(t *testing.T) {
+func TestDecodesLiveInvoicePaymentOptionVariants(t *testing.T) {
+	var invoice Invoice
+	if err := json.Unmarshal([]byte(liveInvoiceJSON()), &invoice); err != nil {
+		t.Fatal(err)
+	}
+
+	if invoice.CheckoutStatus != CheckoutStatusOpen {
+		t.Fatalf("unexpected checkout status: %s", invoice.CheckoutStatus)
+	}
+	if invoice.MonitoringEndsAt == nil || *invoice.MonitoringEndsAt != "2026-06-16T00:00:00.000Z" {
+		t.Fatalf("unexpected monitoring end: %#v", invoice.MonitoringEndsAt)
+	}
+	if len(invoice.PaymentOptions) != 3 {
+		t.Fatalf("unexpected payment options length: %#v", invoice.PaymentOptions)
+	}
+
+	evmDeposit := invoice.PaymentOptions[0]
+	if evmDeposit.CollectionMethod != PaymentOptionCollectionMethodEVMDeposit ||
+		evmDeposit.ChainNamespace != ChainNamespaceEIP155 ||
+		evmDeposit.Status != PaymentOptionStatusReady {
+		t.Fatalf("unexpected evm deposit option: %#v", evmDeposit)
+	}
+	if evmDeposit.TokenDecimals != 6 {
+		t.Fatalf("unexpected evm deposit token decimals: %d", evmDeposit.TokenDecimals)
+	}
+	if evmDeposit.DepositAddress == nil || *evmDeposit.DepositAddress != "0xdeposit" {
+		t.Fatalf("unexpected deposit address: %#v", evmDeposit.DepositAddress)
+	}
+	if evmDeposit.SuggestedAmount == nil || *evmDeposit.SuggestedAmount != "149.000000" {
+		t.Fatalf("unexpected suggested amount: %#v", evmDeposit.SuggestedAmount)
+	}
+	if evmDeposit.LogoURL != nil || evmDeposit.ChainLogoURL != nil {
+		t.Fatalf("unexpected evm deposit logos: %#v", evmDeposit)
+	}
+	if evmDeposit.RecipientAddress != nil || evmDeposit.InvoiceAmount != nil ||
+		evmDeposit.MatchingIncrement != nil || evmDeposit.ExactAmount != nil {
+		t.Fatalf("unexpected direct_exact fields on an evm deposit option: %#v", evmDeposit)
+	}
+
+	directExact := invoice.PaymentOptions[1]
+	if directExact.CollectionMethod != PaymentOptionCollectionMethodDirectExact ||
+		directExact.ChainNamespace != ChainNamespaceSolana ||
+		directExact.Status != PaymentOptionStatusReady {
+		t.Fatalf("unexpected direct exact option: %#v", directExact)
+	}
+	if directExact.RecipientAddress == nil || *directExact.RecipientAddress != "SoLrecipient" {
+		t.Fatalf("unexpected recipient address: %#v", directExact.RecipientAddress)
+	}
+	if directExact.InvoiceAmount == nil || *directExact.InvoiceAmount != "149.000000" {
+		t.Fatalf("unexpected invoice amount: %#v", directExact.InvoiceAmount)
+	}
+	if directExact.MatchingIncrement == nil || *directExact.MatchingIncrement != "0.000123" {
+		t.Fatalf("unexpected matching increment: %#v", directExact.MatchingIncrement)
+	}
+	if directExact.ExactAmount == nil || *directExact.ExactAmount != "149.000123" {
+		t.Fatalf("unexpected exact amount: %#v", directExact.ExactAmount)
+	}
+	if directExact.DepositAddress != nil || directExact.SuggestedAmount != nil {
+		t.Fatalf("unexpected evm_deposit fields on a direct exact option: %#v", directExact)
+	}
+	if directExact.LogoURL == nil || *directExact.LogoURL != "https://assets.test/usdc.svg" {
+		t.Fatalf("unexpected direct exact logo URL: %#v", directExact.LogoURL)
+	}
+	if directExact.ChainLogoURL == nil || *directExact.ChainLogoURL != "https://assets.test/solana.svg" {
+		t.Fatalf("unexpected direct exact chain logo URL: %#v", directExact.ChainLogoURL)
+	}
+
+	unavailable := invoice.PaymentOptions[2]
+	if unavailable.ChainNamespace != ChainNamespaceTron ||
+		unavailable.Status != PaymentOptionStatusUnavailable {
+		t.Fatalf("unexpected unavailable option: %#v", unavailable)
+	}
+	if unavailable.DepositAddress != nil || unavailable.SuggestedAmount != nil ||
+		unavailable.RecipientAddress != nil || unavailable.InvoiceAmount != nil ||
+		unavailable.MatchingIncrement != nil || unavailable.ExactAmount != nil {
+		t.Fatalf("unexpected instructions on an unavailable option: %#v", unavailable)
+	}
+	if unavailable.NetworkLabel != "TRON" || unavailable.DisplaySymbol != "USDT" {
+		t.Fatalf("unexpected unavailable option display fields: %#v", unavailable)
+	}
+}
+
+func TestDecodesPublicInvoiceTransfers(t *testing.T) {
 	const raw = `{
 		"id":"inv_live_123",
 		"mode":"live",
-		"amount":"149",
+		"amount":"149.0000",
 		"currency":"USD",
 		"description":null,
 		"return_url":null,
 		"project":{"id":"proj_live_123","name":"Live project","logo_url":null},
-		"deposit_address":"0xdeposit",
 		"status":"paid",
+		"checkout_status":"paid",
+		"payment_revision":2,
+		"amount_paid":"154.000000000000000000",
 		"amount_due":"0.000000000000000000",
 		"amount_overpaid":"5.000000000000000000",
-		"monitoring_ends_at":null,
-		"monitoring_status":"ended",
-		"amount_paid":"154.000000000000000000",
-		"payment_status":"paid",
 		"transfers":[
-			{"tx_hash":"0xhash1","amount":"149.000000000000000000","explorer_tx_url":"https://explorer.test/tx/0xhash1"},
-			{"tx_hash":"0xhash2","amount":"5.000000000000000000","explorer_tx_url":null}
+			{
+				"chain_namespace":"eip155",
+				"chain_reference":"8453",
+				"transaction_id":"0xhash1",
+				"event_index":0,
+				"amount":"149.000000000000000000",
+				"explorer_transaction_url":"https://explorer.test/tx/0xhash1"
+			},
+			{
+				"chain_namespace":"eip155",
+				"chain_reference":"8453",
+				"transaction_id":"0xhash1",
+				"event_index":3,
+				"amount":"5.000000000000000000",
+				"explorer_transaction_url":null
+			}
 		],
-		"direct_onchain_rails":[]
+		"monitoring_ends_at":null,
+		"payment_options":[]
 	}`
 
 	var invoice PublicInvoice
@@ -634,23 +770,41 @@ func TestDecodesPublicInvoiceMonitoringStatusAndTransfers(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	if invoice.CheckoutStatus != CheckoutStatusPaid {
+		t.Fatalf("unexpected checkout status: %s", invoice.CheckoutStatus)
+	}
+	if invoice.PaymentRevision != 2 {
+		t.Fatalf("unexpected payment revision: %d", invoice.PaymentRevision)
+	}
 	if invoice.AmountOverpaid != "5.000000000000000000" {
 		t.Fatalf("unexpected amount overpaid: %s", invoice.AmountOverpaid)
-	}
-	if invoice.MonitoringStatus == nil || *invoice.MonitoringStatus != MonitoringStatusEnded {
-		t.Fatalf("unexpected monitoring status: %#v", invoice.MonitoringStatus)
 	}
 	if len(invoice.Transfers) != 2 {
 		t.Fatalf("unexpected transfers length: %#v", invoice.Transfers)
 	}
-	if invoice.Transfers[0].TxHash != "0xhash1" || invoice.Transfers[0].Amount != "149.000000000000000000" {
-		t.Fatalf("unexpected first transfer: %#v", invoice.Transfers[0])
+
+	firstTransfer := invoice.Transfers[0]
+	if firstTransfer.ChainNamespace != ChainNamespaceEIP155 || firstTransfer.ChainReference != "8453" {
+		t.Fatalf("unexpected first transfer chain: %#v", firstTransfer)
 	}
-	if invoice.Transfers[0].ExplorerTxURL == nil || *invoice.Transfers[0].ExplorerTxURL != "https://explorer.test/tx/0xhash1" {
-		t.Fatalf("unexpected first transfer explorer URL: %#v", invoice.Transfers[0].ExplorerTxURL)
+	if firstTransfer.TransactionID != "0xhash1" || firstTransfer.Amount != "149.000000000000000000" {
+		t.Fatalf("unexpected first transfer: %#v", firstTransfer)
 	}
-	if invoice.Transfers[1].ExplorerTxURL != nil {
-		t.Fatalf("expected nil explorer URL on second transfer, got %#v", invoice.Transfers[1].ExplorerTxURL)
+	if firstTransfer.EventIndex != 0 {
+		t.Fatalf("unexpected first transfer event index: %d", firstTransfer.EventIndex)
+	}
+	if firstTransfer.ExplorerTransactionURL == nil ||
+		*firstTransfer.ExplorerTransactionURL != "https://explorer.test/tx/0xhash1" {
+		t.Fatalf("unexpected first transfer explorer URL: %#v", firstTransfer.ExplorerTransactionURL)
+	}
+
+	// One transaction can carry several credits, separated by event_index only.
+	secondTransfer := invoice.Transfers[1]
+	if secondTransfer.TransactionID != firstTransfer.TransactionID || secondTransfer.EventIndex != 3 {
+		t.Fatalf("unexpected second transfer: %#v", secondTransfer)
+	}
+	if secondTransfer.ExplorerTransactionURL != nil {
+		t.Fatalf("expected nil explorer URL on second transfer, got %#v", secondTransfer.ExplorerTransactionURL)
 	}
 }
 
@@ -659,22 +813,24 @@ func isSDKError(err error) bool {
 	return errors.As(err, &sdkError)
 }
 
+// Test invoices carry no payment window and no payment options, and their
+// checkout status is always unavailable.
 func secretInvoiceJSON(status string) string {
 	return `{
 		"id":"inv_test_123",
 		"mode":"test",
-		"amount":"149",
+		"amount":"149.0000",
 		"currency":"USD",
 		"reference_id":"order_123",
 		"description":"Test order",
 		"return_url":"https://merchant.test/thanks",
-		"deposit_address":null,
 		"status":"` + status + `",
+		"checkout_status":"unavailable",
+		"payment_revision":0,
 		"amount_due":"149.000000000000000000",
 		"amount_overpaid":"0.000000000000000000",
 		"monitoring_ends_at":null,
-		"monitoring_status":null,
-		"direct_onchain_rails":[]
+		"payment_options":[]
 	}`
 }
 
@@ -682,21 +838,20 @@ func publicInvoiceJSON(status string) string {
 	return `{
 		"id":"inv_test_123",
 		"mode":"test",
-		"amount":"149",
+		"amount":"149.0000",
 		"currency":"USD",
 		"description":"Test order",
 		"return_url":null,
 		"project":{"id":"proj_test_123","name":"Test project","logo_url":null},
-		"deposit_address":null,
 		"status":"` + status + `",
+		"checkout_status":"unavailable",
+		"payment_revision":0,
+		"amount_paid":"0.000000000000000000",
 		"amount_due":"149.000000000000000000",
 		"amount_overpaid":"0.000000000000000000",
-		"monitoring_ends_at":null,
-		"monitoring_status":null,
-		"amount_paid":"0",
-		"payment_status":"unpaid",
 		"transfers":[],
-		"direct_onchain_rails":[]
+		"monitoring_ends_at":null,
+		"payment_options":[]
 	}`
 }
 
@@ -704,20 +859,86 @@ func testPaymentInvoiceJSON(status string) string {
 	return `{
 		"id":"inv_test_123",
 		"mode":"test",
-		"amount":"149",
+		"amount":"149.0000",
 		"currency":"USD",
 		"reference_id":"order_123",
 		"description":"Test order",
 		"return_url":"https://merchant.test/thanks",
-		"deposit_address":null,
 		"status":"` + status + `",
+		"checkout_status":"unavailable",
+		"payment_revision":1,
 		"amount_due":"0.000000000000000000",
 		"amount_overpaid":"0.000000000000000000",
 		"monitoring_ends_at":null,
-		"monitoring_status":null,
-		"amount_paid":"149",
-		"fully_paid_at":"2026-06-15T00:00:00.000Z",
-		"direct_onchain_rails":[]
+		"payment_options":[],
+		"amount_paid":"149.000000000000000000",
+		"fully_paid_at":"2026-06-15T00:00:00.000Z"
+	}`
+}
+
+// A live create response, with one payment option per issued variant.
+func liveInvoiceJSON() string {
+	return `{
+		"id":"inv_live_123",
+		"mode":"live",
+		"amount":"149.0000",
+		"currency":"USD",
+		"reference_id":"order_123",
+		"description":"Test order",
+		"return_url":null,
+		"status":"unpaid",
+		"checkout_status":"open",
+		"payment_revision":0,
+		"amount_due":"149.000000000000000000",
+		"amount_overpaid":"0.000000000000000000",
+		"monitoring_ends_at":"2026-06-16T00:00:00.000Z",
+		"payment_options":[
+			{
+				"collection_method":"evm_deposit",
+				"chain_namespace":"eip155",
+				"chain_reference":"8453",
+				"currency":"USD",
+				"token_address":"0xtoken",
+				"token_decimals":6,
+				"network_label":"Base",
+				"display_symbol":"USDC",
+				"logo_url":null,
+				"chain_logo_url":null,
+				"status":"ready",
+				"deposit_address":"0xdeposit",
+				"suggested_amount":"149.000000"
+			},
+			{
+				"collection_method":"direct_exact",
+				"chain_namespace":"solana",
+				"chain_reference":"5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+				"currency":"USD",
+				"token_address":"SoLtoken",
+				"token_decimals":6,
+				"network_label":"Solana",
+				"display_symbol":"USDC",
+				"logo_url":"https://assets.test/usdc.svg",
+				"chain_logo_url":"https://assets.test/solana.svg",
+				"status":"ready",
+				"recipient_address":"SoLrecipient",
+				"invoice_amount":"149.000000",
+				"matching_increment":"0.000123",
+				"exact_amount":"149.000123"
+			},
+			{
+				"collection_method":"direct_exact",
+				"chain_namespace":"tron",
+				"chain_reference":"0x2b6653dc",
+				"currency":"USD",
+				"token_address":"TRXtoken",
+				"token_decimals":6,
+				"network_label":"TRON",
+				"display_symbol":"USDT",
+				"logo_url":null,
+				"chain_logo_url":null,
+				"status":"unavailable"
+			}
+		]
 	}`
 }
 

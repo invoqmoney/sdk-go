@@ -36,6 +36,7 @@ Go 1.22 veya üstünü ister.
 1. [invoq paneline](https://app.invoq.money) giriş yapın ve bir proje oluşturun.
 2. **API keys** sayfasında bir gizli anahtar oluşturun. Test anahtarları `sk_test_` ile, canlı anahtarlar `sk_live_` ile başlar. Anahtarın modu, faturaların test mi canlı mı olacağını belirler.
 3. Projenizin **webhooks** ayarlarında webhook URL'nizi kaydedin. O modun webhook sırrı (`whsec_...`) yalnızca bir kez, webhook'u ilk etkinleştirdiğinizde gösterilir — hemen saklayın. Webhook URL'leri herkese açık HTTPS URL'leri olmalı.
+4. Canlıya geçmeden önce **Receiving wallet** ayarınızı yapın. Test faturaları buna ihtiyaç duymaz; paranın gideceği yer olmayan canlı bir fatura `409 no_payment_options_available` ile başarısız olur.
 
 İkisini de sunucu ortamınıza ekleyin:
 
@@ -110,7 +111,6 @@ ctx := context.Background()
 
 invoice, err := client.Invoices.Create(ctx, invoq.CreateInvoiceInput{
 	Amount:      "129",
-	Currency:    invoq.InvoiceCurrencyUSD,
 	Description: invoq.String("SaaS boilerplate"),
 	ReferenceID: invoq.String("order_1234"),
 	ReturnURL:   invoq.StringOrNull("https://merchant.example/thanks"),
@@ -125,7 +125,7 @@ _ = invoice.ID
 Notlar:
 
 - Tutarı sunucu tarafında belirleyin. İstemciden gelen tutarlara güvenmeyin.
-- `amount`, `0.01` ile `1000000.00` arasında, en fazla 2 ondalık basamaklı, USD cinsinden ondalık bir dizedir — örneğin `129` veya `129.99`.
+- `amount`, `0.01` ile `1000000.00` arasında, en fazla 2 ondalık basamaklı, USD cinsinden ondalık bir dizedir — örneğin `129` veya `129.99`. Para birimi her zaman USD'dir ve test mi live mı olduğu anahtardan gelir — ikisi de istek alanı değildir.
 - `invoice.paid` webhook'larını siparişinize geri bağlamak için `reference_id` kullanın. Oluşturmayı yeniden denemeyi de güvenli kılar: aynı `reference_id` ve aynı fatura koşullarıyla tekrar oluşturursanız kopya yerine mevcut faturayı alırsınız; farklı koşullar ise `409 reference_id_conflict` API hatasıyla başarısız olur.
 - İsteğe bağlı istek dizeleri için `invoq.String(...)` kullanın. `return_url` değerini ayarlamak için `invoq.StringOrNull(...)`, JSON `null` göndermek için `invoq.NullString()` kullanın; alanı atlamak için ise ayarsız bırakın.
 
@@ -154,7 +154,7 @@ _ = paidInvoice.Status // tamamen ödendiğinde invoq.InvoiceStatusPaid
 
 `CreateTestPayment` yalnızca `sk_test_` anahtarıyla oluşturulmuş faturalarda çalışır. Ödemeler fatura tutarına ulaştığında fatura `paid` olur ve invoq, test webhook URL'nize gerçekten imzalanmış bir `invoice.paid` webhook'u gönderir. Kısmi tutarlara izin verilir; sonuç `partially_paid` olur.
 
-Webhook'ları kendi makinenizde almak için yerel sunucunuzu ngrok veya cloudflared gibi bir HTTPS tüneliyle dışa açın ve tünel URL'sini panelde test webhook URL'niz olarak kaydedin. Panel, bağlantıyı denetlemek için imzalı bir `webhook.ping` de gönderebilir.
+Webhook'ları kendi makinenizde almak için yerel sunucunuzu ngrok veya cloudflared gibi bir HTTPS tüneliyle dışa açın ve tünel URL'sini panelde test webhook URL'niz olarak kaydedin.
 
 ## Webhook'lar
 
@@ -193,9 +193,11 @@ func handleWebhook(response http.ResponseWriter, request *http.Request) {
 }
 ```
 
-Siparişleri sunucunuzda `invoice.paid` webhook'larıyla işleyin. `IsInvoicePaid(event)` true olduğunda fatura otomatik olarak işlenmeye hazırdır; durumu `paid`, `settling` ya da `settled` olur. `review_required` durumundaki fatura henüz `invoice.paid` webhook'u göndermez. İnceleme onaylandıktan sonra gelecek `invoice.paid` webhook'unu bekleyin.
+Siparişleri sunucunuzda `invoice.paid` webhook'larıyla işleyin. `IsInvoicePaid(event)` true olduğunda fatura otomatik olarak işlenmeye hazırdır; durumu `paid`, `settling` ya da `settled` olur. `review_required` durumundaki bir fatura, inceleme sonuçlanana kadar hiç `invoice.paid` göndermez.
 
-Başarısız teslimatlar yeniden denenir; bu yüzden `reference_id` veya fatura `id`'siyle idempotent şekilde işleyin ve tekrar gelen teslimatları yok sayın. Hızla 2xx dönün; diğer her durum kodu başarısız teslimat sayılır.
+invoq, daha önce ödenmiş bir fatura kendi tutarının altına geri düştüğünde `invoice.payment_reversed` de gönderir — örneğin zincir reorg'u onaylanmış bir transferi düşürdüğünde. Bunu `invoq.IsInvoicePaymentReversed(event)` ile yakalayın, `invoq.AsInvoicePaymentReversedEvent(event)` ile çözün ve kendi politikanıza göre siparişi bekletin veya geri alın.
+
+Başarısız teslimatlar yeniden denenir (en fazla 5 deneme; aralar 1 dakika, 5 dakika, 30 dakika, ardından 2 saat); bu yüzden `reference_id` veya fatura `id`'siyle idempotent şekilde işleyin ve tekrar gelen teslimatları yok sayın. Teslimatlar sırasız da gelebilir — `payment_revision` değeri en yüksek olan anlık görüntüyü saklayın. Hızla 2xx dönün; diğer her durum kodu başarısız teslimat sayılır ve yeniden denenir, yönlendirmeler ve `4xx` yanıtları da buna dahildir.
 
 `VerifyWebhook`, `http.Header` kabul eder. `invoq-signature` başlık değerine zaten sahipseniz `VerifyWebhookWithSignature` kullanın.
 
@@ -236,9 +238,17 @@ client, err := invoq.New(apiKey,
 )
 ```
 
-- `client.Invoices.Create(ctx, input)` bir fatura oluşturur. `input`: `Amount` (zorunlu), `Currency` (`InvoiceCurrencyUSD`, varsayılan), `Description`, `ReferenceID`, `ReturnURL`.
+- `client.Invoices.Create(ctx, input)` bir fatura oluşturur. `input`: `Amount` (zorunlu), `Description`, `ReferenceID`, `ReturnURL`.
 - `client.Invoices.Get(ctx, invoiceID)` herkese açık bir faturayı getirir ve `*invoq.PublicInvoice` döndürür.
 - `client.Invoices.CreateTestPayment(ctx, invoiceID, input)` test faturasında ödeme simüle eder ve `*invoq.TestPaymentInvoice` döndürür.
 - `invoq.VerifyWebhook(rawBody, headers, webhookSecret)` bir webhook'u doğrular ve `invoq.WebhookEvent` döndürür.
-- `invoq.IsInvoicePaid(event)` ve `invoq.AsInvoicePaidEvent(event)`, tipli `invoice.paid` olaylarını ayırt eder.
+- `invoq.IsInvoicePaid(event)` ve `invoq.AsInvoicePaidEvent(event)`, tipli `invoice.paid` olaylarını ayırt eder. `invoq.IsInvoicePaymentReversed(event)` ve `invoq.AsInvoicePaymentReversedEvent(event)` aynısını `invoice.payment_reversed` için yapar. İkisi de bozuk bir olayı reddeder; bu SDK sürümünün modellemediği bir olay tipi de doğrulanır ve olduğu gibi döndürülür.
 - SDK, `User-Agent` için Go modül sürümünü derleme bilgisinden (build info) algılar. `v0.1.0` gibi yayımlanan etiketler `v` öneki olmadan gönderilir; modül sürümü olmayan yerel kaynak derlemeleri `unknown` kullanır.
+
+`Invoices.Get` barındırılan checkout sayfasının kullandığı herkese açık fatura şeklini döndürür: oluşturma yanıtının şekli, artı `AmountPaid`, `Project` ve `Transfers`, eksi `ReferenceID`. Merchant `reference_id` değeriniz gerektiğinde oluşturma yanıtını veya `invoice.paid` webhook'unu kullanın.
+
+İki durum alanı. `Status` muhasebe durumudur — `unpaid`, `partially_paid`, `paid`, `settling`, `settled`, `review_required` — ve ödeme tamamlanmış sayılan üç değer yalnızca paranın cüzdanınıza ne kadar yaklaştığıyla ayrılır. `CheckoutStatus` ödeyenin gördüğüdür — `open`, `confirming`, `expired`, `paid`, `unavailable` — ve siparişi işlemek için asla yetki vermez. `PaymentRevision`, onaylanmış ödeme kümesi her değiştiğinde artar; böylece elinizdekinden eski bir anlık görüntüyü eleyebilirsiniz.
+
+Yanıtlardaki tutarlar 4 ondalık basamağa normalize edilir: `129` ile oluşturun, fatura `Amount` `129.0000` döndürür. Tutarları dize olarak değil, sayısal karşılaştırın. `AmountDue`, `max(amount - amount_paid, 0)` olarak türetilir ve `AmountPaid` ile aynı 18 ondalık basamak ölçeğini kullanır; `AmountOverpaid` ise onun aynasıdır, `max(amount_paid - amount, 0)`, yani parayı kendiniz çıkarmanız hiç gerekmez.
+
+`PaymentOptions` ödeme talimatlarını taşır; oluşturulurken sabitlenir ve test modunda `[]` olur. Girdiler önce `Status`, sonra `CollectionMethod` ile ayrışır: yalnızca `ready` ödenebilir, `evm_deposit` `DepositAddress` ve `SuggestedAmount` taşır, `direct_exact` `RecipientAddress` ile alıcının son hanesine kadar göndermesi gereken `ExactAmount` değerini taşır. Bu talimat alanları diğer tüm girdilerde `nil` olur ve bir seçeneğin kimliği `(ChainNamespace, ChainReference, TokenAddress)` üçlüsüdür, slice içindeki sırası değil. `Transfers` onaylanmış tahsilat kaydıdır — `TransactionID`, `EventIndex`, `Amount`, `ExplorerTransactionURL` — ve bir ödeme onaylanana kadar `[]` kalır. Tüm alanlar: [REST API belgeleri](https://github.com/invoqmoney/api).

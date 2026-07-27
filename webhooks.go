@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -29,27 +30,39 @@ func IsInvoicePaid(event WebhookEvent) bool {
 	return ok
 }
 
+// IsInvoicePaymentReversed returns whether a verified webhook event matches the
+// invoice.payment_reversed shape.
+func IsInvoicePaymentReversed(event WebhookEvent) bool {
+	_, ok := AsInvoicePaymentReversedEvent(event)
+	return ok
+}
+
 // AsInvoicePaidEvent decodes a verified invoice.paid webhook event.
 func AsInvoicePaidEvent(event WebhookEvent) (*InvoicePaidEvent, bool) {
-	if !hasInvoicePaidShape(event) {
+	invoice, ok := lifecycleEventInvoice(event, WebhookEventTypeInvoicePaid)
+	if !ok {
 		return nil, false
 	}
 
-	eventBytes, err := json.Marshal(event)
-	if err != nil {
+	// Paid-equivalent statuses only: review_required has money against it but is
+	// not cleared for fulfillment.
+	if !isInvoicePaidStatus(invoice["status"]) {
 		return nil, false
 	}
 
-	var invoicePaidEvent InvoicePaidEvent
-	if err := json.Unmarshal(eventBytes, &invoicePaidEvent); err != nil {
+	return decodeWebhookEvent[InvoicePaidEvent](event)
+}
+
+// AsInvoicePaymentReversedEvent decodes a verified invoice.payment_reversed webhook event.
+func AsInvoicePaymentReversedEvent(event WebhookEvent) (*InvoicePaymentReversedEvent, bool) {
+	// No status check, unlike the paid guard: rejecting an unrecognized status
+	// would drop the event and leave the order fulfilled on a payment that no
+	// longer exists.
+	if _, ok := lifecycleEventInvoice(event, WebhookEventTypeInvoicePaymentReversed); !ok {
 		return nil, false
 	}
 
-	if invoicePaidEvent.Type != "invoice.paid" {
-		return nil, false
-	}
-
-	return &invoicePaidEvent, true
+	return decodeWebhookEvent[InvoicePaymentReversedEvent](event)
 }
 
 func verifyWebhookWithNow(rawBody []byte, signature string, webhookSecret string, nowSeconds int64) (WebhookEvent, error) {
@@ -156,47 +169,70 @@ func hmacSHA256Hex(secret string, timestamp string, rawBody []byte) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-func hasInvoicePaidShape(event WebhookEvent) bool {
-	if event == nil {
-		return false
+func decodeWebhookEvent[T any](event WebhookEvent) (*T, bool) {
+	eventBytes, err := json.Marshal(event)
+	if err != nil {
+		return nil, false
 	}
 
-	if event["type"] != "invoice.paid" {
-		return false
+	var decodedEvent T
+	if err := json.Unmarshal(eventBytes, &decodedEvent); err != nil {
+		return nil, false
+	}
+
+	return &decodedEvent, true
+}
+
+// lifecycleEventInvoice returns the invoice payload both lifecycle events share,
+// so each guard can apply its own status rule. It reports false when the event
+// is not a well-formed event of that type.
+func lifecycleEventInvoice(event WebhookEvent, eventType WebhookEventType) (map[string]any, bool) {
+	if event == nil {
+		return nil, false
+	}
+
+	if event["type"] != string(eventType) {
+		return nil, false
 	}
 	if _, ok := event["id"].(string); !ok {
-		return false
+		return nil, false
 	}
 	if !isInvoiceMode(event["mode"]) {
-		return false
+		return nil, false
 	}
 	if _, ok := event["created_at"].(string); !ok {
-		return false
+		return nil, false
 	}
 
 	data, ok := event["data"].(map[string]any)
 	if !ok {
-		return false
+		return nil, false
 	}
 
 	invoice, ok := data["invoice"].(map[string]any)
 	if !ok {
-		return false
+		return nil, false
 	}
 
 	referenceID, hasReferenceID := invoice["reference_id"]
 	fullyPaidAt, hasFullyPaidAt := invoice["fully_paid_at"]
 
-	return stringField(invoice, "id") &&
+	valid := stringField(invoice, "id") &&
 		isInvoiceMode(invoice["mode"]) &&
-		isInvoicePaidStatus(invoice["status"]) &&
+		isString(invoice["status"]) &&
 		stringField(invoice, "amount") &&
 		invoice["currency"] == "USD" &&
 		stringField(invoice, "amount_paid") &&
 		hasReferenceID &&
 		(referenceID == nil || isString(referenceID)) &&
+		isIntegerNumber(invoice["payment_revision"]) &&
 		hasFullyPaidAt &&
 		(fullyPaidAt == nil || isString(fullyPaidAt))
+	if !valid {
+		return nil, false
+	}
+
+	return invoice, true
 }
 
 func stringField(object map[string]any, key string) bool {
@@ -215,6 +251,25 @@ func isInvoiceMode(value any) bool {
 
 func isInvoicePaidStatus(value any) bool {
 	return value == "paid" || value == "settling" || value == "settled"
+}
+
+// isIntegerNumber reports whether a payload number is a whole number the event
+// types can hold. Verified payloads decode into json.Number; hand-built events
+// carry Go numbers.
+func isIntegerNumber(value any) bool {
+	switch number := value.(type) {
+	case json.Number:
+		_, err := number.Int64()
+		return err == nil
+	case float64:
+		return !math.IsInf(number, 0) && number == math.Trunc(number)
+	case int:
+		return true
+	case int64:
+		return true
+	default:
+		return false
+	}
 }
 
 func isDigits(value string) bool {

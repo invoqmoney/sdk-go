@@ -36,6 +36,7 @@ Yêu cầu Go 1.22 trở lên.
 1. Đăng nhập [bảng điều khiển invoq](https://app.invoq.money) và tạo một dự án.
 2. Ở trang **API keys**, tạo một khóa bí mật. Khóa thử nghiệm bắt đầu bằng `sk_test_`, khóa thật bằng `sk_live_`. Loại khóa quyết định hóa đơn tạo ra là thử nghiệm hay thật.
 3. Trong phần cài đặt **webhooks** của dự án, lưu URL webhook của bạn. Mã bí mật của webhook (`whsec_...`) cho chế độ đó chỉ hiện đúng một lần, lúc bạn bật webhook lần đầu — hãy lưu lại ngay. URL webhook phải là URL HTTPS truy cập công khai được.
+4. Thiết lập **Receiving wallet** của bạn trước khi lên live. Hóa đơn thử nghiệm không cần ví này; hóa đơn live không có nơi để tất toán sẽ lỗi `409 no_payment_options_available`.
 
 Thêm cả hai vào biến môi trường của máy chủ:
 
@@ -110,7 +111,6 @@ ctx := context.Background()
 
 invoice, err := client.Invoices.Create(ctx, invoq.CreateInvoiceInput{
 	Amount:      "129",
-	Currency:    invoq.InvoiceCurrencyUSD,
 	Description: invoq.String("SaaS boilerplate"),
 	ReferenceID: invoq.String("order_1234"),
 	ReturnURL:   invoq.StringOrNull("https://merchant.example/thanks"),
@@ -125,7 +125,7 @@ _ = invoice.ID
 Lưu ý:
 
 - Số tiền phải do máy chủ quyết định. Đừng tin số tiền phía client gửi lên.
-- `amount` là chuỗi thập phân USD từ `0.01` đến `1000000.00`, tối đa 2 chữ số lẻ, ví dụ `129` hoặc `129.99`.
+- `amount` là chuỗi thập phân USD từ `0.01` đến `1000000.00`, tối đa 2 chữ số lẻ, ví dụ `129` hoặc `129.99`. Đơn vị tiền luôn là USD, còn thử nghiệm hay live thì do khóa quyết định — cả hai đều không phải trường trong request.
 - Dùng `reference_id` để nối webhook `invoice.paid` về đúng đơn hàng của bạn. Nó cũng giúp thao tác tạo an toàn khi thử lại: tạo lại với cùng `reference_id` và cùng nội dung hóa đơn sẽ trả về hóa đơn đã có thay vì tạo trùng; nếu nội dung khác nhau, API sẽ báo lỗi `409 reference_id_conflict`.
 - Dùng `invoq.String(...)` cho các chuỗi tùy chọn trong request. Dùng `invoq.StringOrNull(...)` để đặt `return_url`, dùng `invoq.NullString()` để gửi giá trị `null` trong JSON, và bỏ trống trường đó để không gửi nó đi.
 
@@ -154,7 +154,7 @@ _ = paidInvoice.Status // invoq.InvoiceStatusPaid khi đã thanh toán đủ
 
 `CreateTestPayment` chỉ dùng được với hóa đơn tạo bằng khóa `sk_test_`. Khi số tiền thanh toán đạt đủ giá trị hóa đơn, hóa đơn chuyển sang `paid` và invoq gửi một webhook `invoice.paid` có chữ ký thật đến URL webhook thử nghiệm của bạn. Có thể trả từng phần, hóa đơn sẽ thành `partially_paid`.
 
-Để nhận webhook trên máy của mình, hãy mở máy chủ local ra ngoài bằng một tunnel HTTPS như ngrok hay cloudflared, rồi lưu URL tunnel làm URL webhook thử nghiệm trong bảng điều khiển. Bảng điều khiển cũng gửi được một `webhook.ping` có chữ ký để kiểm tra kết nối.
+Để nhận webhook trên máy của mình, hãy mở máy chủ local ra ngoài bằng một tunnel HTTPS như ngrok hay cloudflared, rồi lưu URL tunnel làm URL webhook thử nghiệm trong bảng điều khiển.
 
 ## Webhook
 
@@ -193,9 +193,11 @@ func handleWebhook(response http.ResponseWriter, request *http.Request) {
 }
 ```
 
-Hãy dựa vào webhook `invoice.paid` để xử lý đơn hàng trên máy chủ. Khi `IsInvoicePaid(event)` là true, hóa đơn đã sẵn sàng để xử lý tự động; trạng thái của nó là `paid`, `settling` hoặc `settled`. Hóa đơn ở trạng thái `review_required` hiện chưa gửi webhook `invoice.paid`. Hãy đợi webhook `invoice.paid` sau khi được duyệt.
+Hãy dựa vào webhook `invoice.paid` để xử lý đơn hàng trên máy chủ. Khi `IsInvoicePaid(event)` là true, hóa đơn đã sẵn sàng để xử lý tự động; trạng thái của nó là `paid`, `settling` hoặc `settled`. Hóa đơn ở trạng thái `review_required` không gửi `invoice.paid` nào cho tới khi duyệt xong.
 
-Lần gửi thất bại sẽ được gửi lại, nên hãy xử lý đơn theo cách an toàn khi lặp lại dựa trên `reference_id` hoặc `id` hóa đơn và bỏ qua những lần gửi lặp lại. Hãy trả về 2xx thật nhanh; mọi mã trạng thái khác đều bị tính là giao thất bại.
+invoq cũng gửi `invoice.payment_reversed` khi một hóa đơn đã thanh toán tụt trở lại dưới số tiền của nó — chẳng hạn khi chuỗi reorg làm mất một giao dịch đã xác nhận. Bắt sự kiện đó bằng `invoq.IsInvoicePaymentReversed(event)`, giải mã bằng `invoq.AsInvoicePaymentReversedEvent(event)`, rồi tạm dừng hoặc hoàn tác việc xử lý theo chính sách của bạn.
+
+Lần gửi thất bại sẽ được gửi lại (tối đa 5 lần, cách nhau 1 phút, 5 phút, 30 phút, rồi 2 giờ), nên hãy xử lý đơn theo cách an toàn khi lặp lại dựa trên `reference_id` hoặc `id` hóa đơn và bỏ qua những lần gửi lặp lại. Thứ tự đến cũng không được đảm bảo — hãy giữ bản chụp có `payment_revision` cao nhất. Hãy trả về 2xx thật nhanh; mọi mã trạng thái khác đều bị tính là giao thất bại và sẽ được gửi lại, kể cả redirect và `4xx`.
 
 `VerifyWebhook` nhận `http.Header`. Dùng `VerifyWebhookWithSignature` khi bạn đã có sẵn giá trị của header `invoq-signature`.
 
@@ -236,9 +238,17 @@ client, err := invoq.New(apiKey,
 )
 ```
 
-- `client.Invoices.Create(ctx, input)` tạo một hóa đơn. `input`: `Amount` (bắt buộc), `Currency` (`InvoiceCurrencyUSD`, mặc định), `Description`, `ReferenceID`, `ReturnURL`.
+- `client.Invoices.Create(ctx, input)` tạo một hóa đơn. `input`: `Amount` (bắt buộc), `Description`, `ReferenceID`, `ReturnURL`.
 - `client.Invoices.Get(ctx, invoiceID)` lấy một hóa đơn công khai và trả về `*invoq.PublicInvoice`.
 - `client.Invoices.CreateTestPayment(ctx, invoiceID, input)` mô phỏng thanh toán trên hóa đơn thử nghiệm và trả về `*invoq.TestPaymentInvoice`.
 - `invoq.VerifyWebhook(rawBody, headers, webhookSecret)` xác minh một webhook và trả về `invoq.WebhookEvent`.
-- `invoq.IsInvoicePaid(event)` và `invoq.AsInvoicePaidEvent(event)` nhận diện các sự kiện `invoice.paid` đã được định kiểu.
+- `invoq.IsInvoicePaid(event)` và `invoq.AsInvoicePaidEvent(event)` nhận diện các sự kiện `invoice.paid` đã được định kiểu. `invoq.IsInvoicePaymentReversed(event)` và `invoq.AsInvoicePaymentReversedEvent(event)` làm điều tương tự cho `invoice.payment_reversed`. Cả hai đều từ chối sự kiện sai định dạng; một loại sự kiện mà phiên bản SDK này chưa mô hình hóa vẫn qua được bước xác thực và được trả về nguyên trạng.
 - SDK tự phát hiện phiên bản module Go của mình từ thông tin build để đặt `User-Agent`. Các tag đã phát hành như `v0.1.0` được gửi đi mà không có tiền tố `v`; còn các bản build từ mã nguồn local không có phiên bản module thì dùng `unknown`.
+
+`Invoices.Get` trả về dạng hóa đơn công khai mà trang checkout được host sử dụng: dạng phản hồi khi tạo, cộng thêm `AmountPaid`, `Project` và `Transfers`, và bỏ `ReferenceID`. Hãy dùng phản hồi tạo hóa đơn hoặc webhook `invoice.paid` khi bạn cần `reference_id` phía merchant.
+
+Hai trường trạng thái. `Status` là trạng thái kế toán — `unpaid`, `partially_paid`, `paid`, `settling`, `settled`, `review_required` — và ba giá trị coi như đã thanh toán chỉ khác nhau ở việc tiền đã đi được bao xa về ví của bạn. `CheckoutStatus` là trạng thái người trả tiền thấy — `open`, `confirming`, `expired`, `paid`, `unavailable` — và không bao giờ là căn cứ xử lý đơn. `PaymentRevision` tăng mỗi khi tập hợp thanh toán đã xác nhận thay đổi, nên bạn bỏ được bản chụp cũ hơn bản đang giữ.
+
+Số tiền trong phản hồi được chuẩn hóa về 4 chữ số lẻ: tạo với `129` thì hóa đơn trả về `Amount` `129.0000`. So sánh số tiền theo giá trị số, đừng so sánh chuỗi. `AmountDue` được tính là `max(amount - amount_paid, 0)` và dùng cùng thang 18 chữ số thập phân như `AmountPaid`; `AmountOverpaid` là bản đối xứng của nó, `max(amount_paid - amount, 0)`, nên bạn không bao giờ phải tự trừ tiền.
+
+`PaymentOptions` chứa hướng dẫn thanh toán, cố định lúc tạo và `[]` ở chế độ thử nghiệm. Các mục phân biệt theo `Status`, rồi `CollectionMethod`: chỉ `ready` mới trả được, `evm_deposit` mang `DepositAddress` và `SuggestedAmount`, `direct_exact` mang `RecipientAddress` và `ExactAmount` mà người mua phải gửi đúng đến từng chữ số. Các trường hướng dẫn đó là `nil` ở mọi mục khác, và danh tính của một tùy chọn là `(ChainNamespace, ChainReference, TokenAddress)`, không phải vị trí của nó trong slice. `Transfers` là danh sách biên nhận đã xác nhận — `TransactionID`, `EventIndex`, `Amount`, `ExplorerTransactionURL` — và vẫn là `[]` cho tới khi có thanh toán được xác nhận. Tài liệu đầy đủ các trường: [REST API](https://github.com/invoqmoney/api).

@@ -36,6 +36,7 @@ go get github.com/invoqmoney/sdk-go
 1. 登录 [invoq 商户后台](https://app.invoq.money)，创建一个项目。
 2. 在 **API keys** 页面创建一把密钥（secret key）。测试密钥以 `sk_test_` 开头，正式密钥以 `sk_live_` 开头；用哪种密钥，决定开出的账单是测试单还是正式单。
 3. 在项目的 **webhooks** 设置里保存你的 webhook URL。对应模式的 webhook 签名密钥（`whsec_...`）只在首次启用 webhook 时展示一次——记得马上存好。webhook URL 必须是公网可访问的 HTTPS 地址。
+4. 上线前先设置 **Receiving wallet**。测试账单不需要它；没有结算去向的正式账单会以 `409 no_payment_options_available` 失败。
 
 把两者都加进服务端环境变量：
 
@@ -110,7 +111,6 @@ ctx := context.Background()
 
 invoice, err := client.Invoices.Create(ctx, invoq.CreateInvoiceInput{
 	Amount:      "129",
-	Currency:    invoq.InvoiceCurrencyUSD,
 	Description: invoq.String("SaaS boilerplate"),
 	ReferenceID: invoq.String("order_1234"),
 	ReturnURL:   invoq.StringOrNull("https://merchant.example/thanks"),
@@ -125,7 +125,7 @@ _ = invoice.ID
 说明：
 
 - 金额要由服务端决定，不要相信客户端传来的金额。
-- `amount` 是 `0.01` 到 `1000000.00` 之间的十进制美元字符串，最多两位小数，比如 `129` 或 `129.99`。
+- `amount` 是 `0.01` 到 `1000000.00` 之间的十进制美元字符串，最多两位小数，比如 `129` 或 `129.99`。币种恒为 USD，测试还是正式由密钥决定——两者都不是请求字段。
 - 用 `reference_id` 把 `invoice.paid` webhook 对应回你的订单。它还让创建操作可以放心重试：用相同的 `reference_id` 和相同的账单条款再次创建，返回的是已有账单而不是重复开单；条款不同则会报 `409 reference_id_conflict` API 错误。
 - 可选的请求字符串用 `invoq.String(...)`；用 `invoq.StringOrNull(...)` 设置 `return_url`，用 `invoq.NullString()` 发送 JSON `null`，不设置该字段则会将其省略。
 
@@ -154,7 +154,7 @@ _ = paidInvoice.Status // 完全付清时为 invoq.InvoiceStatusPaid
 
 `CreateTestPayment` 只对 `sk_test_` 密钥创建的账单有效。累计付款达到账单金额时，账单变为 `paid`，invoq 会向你的测试 webhook URL 发送一条真实签名的 `invoice.paid` webhook。也可以只付部分金额，账单会变成 `partially_paid`。
 
-要在本机收 webhook，用 ngrok、cloudflared 之类的 HTTPS 隧道把本地服务暴露出去，再把隧道地址保存为商户后台里的测试 webhook URL。后台还能发送一条带签名的 `webhook.ping`，帮你确认连通性。
+要在本机收 webhook，用 ngrok、cloudflared 之类的 HTTPS 隧道把本地服务暴露出去，再把隧道地址保存为商户后台里的测试 webhook URL。
 
 ## Webhooks
 
@@ -193,9 +193,11 @@ func handleWebhook(response http.ResponseWriter, request *http.Request) {
 }
 ```
 
-订单处理以服务端收到的 `invoice.paid` webhook 为准。`IsInvoicePaid(event)` 为 true 时，表示账单可以自动履约；其状态为 `paid`、`settling` 或 `settled`。`review_required` 账单暂时不会发送 `invoice.paid` webhook。请等审核通过后的 `invoice.paid` webhook 再履约。
+订单处理以服务端收到的 `invoice.paid` webhook 为准。`IsInvoicePaid(event)` 为 true 时，表示账单可以自动履约；其状态为 `paid`、`settling` 或 `settled`。`review_required` 账单在审核通过前不会发出任何 `invoice.paid`。
 
-投递失败会重试，所以要按 `reference_id` 或账单 `id` 幂等地处理订单，重复送达直接忽略即可。请尽快返回 2xx；任何其他状态码都算投递失败。
+账单从已付款跌回不足额时，invoq 还会发 `invoice.payment_reversed`——比如链重组把一笔已确认的转账拿掉了。用 `invoq.IsInvoicePaymentReversed(event)` 接住它，用 `invoq.AsInvoicePaymentReversedEvent(event)` 解出内容，再按你自己的策略暂停或撤销履约。
+
+投递失败会重试（最多 5 次，间隔依次为 1 分钟、5 分钟、30 分钟、2 小时），所以要按 `reference_id` 或账单 `id` 幂等地处理订单，重复送达直接忽略即可。送达顺序也不保证——请保留 `payment_revision` 最大的那份快照。请尽快返回 2xx；任何其他状态码都算投递失败并会重试，重定向和 `4xx` 也在其中。
 
 `VerifyWebhook` 接受 `http.Header`。如果你已经拿到了 `invoq-signature` 头的值，可以改用 `VerifyWebhookWithSignature`。
 
@@ -236,9 +238,17 @@ client, err := invoq.New(apiKey,
 )
 ```
 
-- `client.Invoices.Create(ctx, input)` —— 创建账单。`input`：`Amount`（必填）、`Currency`（`InvoiceCurrencyUSD`，默认值）、`Description`、`ReferenceID`、`ReturnURL`。
+- `client.Invoices.Create(ctx, input)` —— 创建账单。`input`：`Amount`（必填）、`Description`、`ReferenceID`、`ReturnURL`。
 - `client.Invoices.Get(ctx, invoiceID)` —— 查询公开账单，返回 `*invoq.PublicInvoice`。
 - `client.Invoices.CreateTestPayment(ctx, invoiceID, input)` —— 在测试账单上模拟付款，返回 `*invoq.TestPaymentInvoice`。
 - `invoq.VerifyWebhook(rawBody, headers, webhookSecret)` —— 对 webhook 验签，返回 `invoq.WebhookEvent`。
-- `invoq.IsInvoicePaid(event)` 和 `invoq.AsInvoicePaidEvent(event)` —— 识别带类型的 `invoice.paid` 事件。
+- `invoq.IsInvoicePaid(event)` 和 `invoq.AsInvoicePaidEvent(event)` —— 识别带类型的 `invoice.paid` 事件。`invoq.IsInvoicePaymentReversed(event)` 和 `invoq.AsInvoicePaymentReversedEvent(event)` 对 `invoice.payment_reversed` 做同样的事。两者都会拒绝结构不合法的事件；本版 SDK 尚未建模的事件类型同样能验签通过，并原样返回。
 - SDK 会从构建信息中读取自己的 Go 模块版本，用于 `User-Agent`。像 `v0.1.0` 这样的发布标签会去掉 `v` 前缀后发送；本地源码构建若没有模块版本，则使用 `unknown`。
+
+`Invoices.Get` 返回托管收银页使用的公开账单结构：即创建响应的结构，加上 `AmountPaid`、`Project` 和 `Transfers`，去掉 `ReferenceID`。如果需要商户侧的 `reference_id`，请使用创建账单的响应或 `invoice.paid` webhook。
+
+账单有两个状态字段。`Status` 是记账状态——`unpaid`、`partially_paid`、`paid`、`settling`、`settled`、`review_required`，其中三个等同于已付款的取值只差在资金离你的钱包还有多远。`CheckoutStatus` 是付款人看到的状态——`open`、`confirming`、`expired`、`paid`、`unavailable`——它从不构成履约依据。`PaymentRevision` 每当已确认的付款集合变化就加一，你可以据此丢掉比手上更旧的快照。
+
+响应里的金额统一格式化为 4 位小数：用 `129` 创建，账单返回 `Amount` `129.0000`。比较金额请按数值比，不要按字符串比。`AmountDue` 按 `max(amount - amount_paid, 0)` 派生，使用和 `AmountPaid` 相同的 18 位小数 scale；`AmountOverpaid` 与它互为镜像，即 `max(amount_paid - amount, 0)`，所以你不必自己做减法。
+
+`PaymentOptions` 装的是付款指令，创建时即固定，测试模式下为 `[]`。每一项先按 `Status` 分辨，再按 `CollectionMethod` 分辨：只有 `ready` 可付，`evm_deposit` 带 `DepositAddress` 和 `SuggestedAmount`，`direct_exact` 带 `RecipientAddress` 以及买家必须一位不差转出的 `ExactAmount`。这些指令字段在其他条目上都是 `nil`；一个选项的身份是 `(ChainNamespace, ChainReference, TokenAddress)`，而不是它在切片中的位置。`Transfers` 是已确认的收款记录——`TransactionID`、`EventIndex`、`Amount`、`ExplorerTransactionURL`——在有付款确认前一直是 `[]`。完整字段说明见 [REST API 文档](https://github.com/invoqmoney/api)。

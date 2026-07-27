@@ -36,6 +36,7 @@ Requer Go 1.22 ou mais novo.
 1. Entre no [painel da invoq](https://app.invoq.money) e crie um projeto.
 2. Na página **API keys**, crie uma chave secreta. Chaves de teste começam com `sk_test_`, chaves de produção com `sk_live_`. O modo da chave define se as faturas são de teste ou de produção.
 3. Nas configurações de **webhooks** do projeto, salve a URL do seu webhook. O segredo do webhook (`whsec_...`) daquele modo aparece uma única vez, quando você ativa o webhook pela primeira vez — guarde na hora. A URL do webhook precisa ser HTTPS e pública.
+4. Configure a sua **Receiving wallet** antes de ir para produção. Faturas de teste não precisam dela; uma fatura real sem destino de liquidação falha com `409 no_payment_options_available`.
 
 Adicione os dois ao ambiente do seu servidor:
 
@@ -110,7 +111,6 @@ ctx := context.Background()
 
 invoice, err := client.Invoices.Create(ctx, invoq.CreateInvoiceInput{
 	Amount:      "129",
-	Currency:    invoq.InvoiceCurrencyUSD,
 	Description: invoq.String("SaaS boilerplate"),
 	ReferenceID: invoq.String("order_1234"),
 	ReturnURL:   invoq.StringOrNull("https://merchant.example/thanks"),
@@ -125,7 +125,7 @@ _ = invoice.ID
 Notas:
 
 - Defina o valor no servidor. Não confie em valores vindos do cliente.
-- `amount` é uma string decimal em USD de `0.01` a `1000000.00`, com até 2 casas decimais, como `129` ou `129.99`.
+- `amount` é uma string decimal em USD de `0.01` a `1000000.00`, com até 2 casas decimais, como `129` ou `129.99`. A moeda é sempre USD, e teste ou live vem da chave — nenhum dos dois é campo da requisição.
 - Use o `reference_id` para ligar os webhooks `invoice.paid` ao seu pedido. Ele também deixa a criação segura para repetir: se você criar de novo com o mesmo `reference_id` e os mesmos termos, recebe a fatura existente em vez de uma duplicata; com termos diferentes, a chamada falha com o erro de API `409 reference_id_conflict`.
 - Use `invoq.String(...)` para strings opcionais da requisição. Use `invoq.StringOrNull(...)` para definir `return_url`, `invoq.NullString()` para enviar `null` em JSON e deixe o campo sem definir para omiti-lo.
 
@@ -154,7 +154,7 @@ _ = paidInvoice.Status // invoq.InvoiceStatusPaid quando totalmente pago
 
 `CreateTestPayment` só funciona em faturas criadas com chave `sk_test_`. Quando os pagamentos atingem o valor da fatura, ela vira `paid` e a invoq envia um webhook `invoice.paid` assinado de verdade para a sua URL de webhook de teste. Valores parciais são permitidos e produzem `partially_paid`.
 
-Para receber webhooks na sua máquina, exponha o servidor local com um túnel HTTPS como ngrok ou cloudflared e salve a URL do túnel como URL de webhook de teste no painel. O painel também consegue enviar um `webhook.ping` assinado para checar a conectividade.
+Para receber webhooks na sua máquina, exponha o servidor local com um túnel HTTPS como ngrok ou cloudflared e salve a URL do túnel como URL de webhook de teste no painel.
 
 ## Webhooks
 
@@ -193,9 +193,11 @@ func handleWebhook(response http.ResponseWriter, request *http.Request) {
 }
 ```
 
-Use os webhooks `invoice.paid` para processar os pedidos no seu servidor. Quando `IsInvoicePaid(event)` for true, a fatura está pronta para processamento automático; o status dela é `paid`, `settling` ou `settled`. Uma fatura `review_required` ainda não envia um webhook `invoice.paid`. Aguarde um webhook `invoice.paid` posterior depois que a revisão for aprovada.
+Use os webhooks `invoice.paid` para processar os pedidos no seu servidor. Quando `IsInvoicePaid(event)` for true, a fatura está pronta para processamento automático; o status dela é `paid`, `settling` ou `settled`. Uma fatura `review_required` não envia nenhum `invoice.paid` até a revisão ser aprovada.
 
-Entregas que falham são reenviadas, então processe de forma idempotente por `reference_id` ou pelo `id` da fatura e trate entregas repetidas como operações sem efeito. Responda com 2xx rápido; qualquer outro status conta como entrega falhada.
+A invoq também envia `invoice.payment_reversed` quando uma fatura já paga volta a ficar abaixo do valor dela — por exemplo, quando uma reorganização da chain derruba uma transferência confirmada. Capture com `invoq.IsInvoicePaymentReversed(event)`, decodifique com `invoq.AsInvoicePaymentReversedEvent(event)` e segure ou reverta o processamento conforme a sua própria política.
+
+Entregas que falham são reenviadas (até 5 tentativas, com intervalos de 1 minuto, 5 minutos, 30 minutos e depois 2 horas), então processe de forma idempotente por `reference_id` ou pelo `id` da fatura e trate entregas repetidas como operações sem efeito. Elas também podem chegar fora de ordem: fique com o snapshot de maior `payment_revision`. Responda com 2xx rápido; qualquer outro status conta como entrega falhada e é reenviado, inclusive redirecionamentos e `4xx`.
 
 `VerifyWebhook` aceita `http.Header`. Use `VerifyWebhookWithSignature` quando você já tiver o valor do cabeçalho `invoq-signature`.
 
@@ -236,9 +238,17 @@ client, err := invoq.New(apiKey,
 )
 ```
 
-- `client.Invoices.Create(ctx, input)` cria uma fatura. `input`: `Amount` (obrigatório), `Currency` (`InvoiceCurrencyUSD`, padrão), `Description`, `ReferenceID`, `ReturnURL`.
+- `client.Invoices.Create(ctx, input)` cria uma fatura. `input`: `Amount` (obrigatório), `Description`, `ReferenceID`, `ReturnURL`.
 - `client.Invoices.Get(ctx, invoiceID)` busca uma fatura pública e retorna `*invoq.PublicInvoice`.
 - `client.Invoices.CreateTestPayment(ctx, invoiceID, input)` simula um pagamento numa fatura de teste e retorna `*invoq.TestPaymentInvoice`.
 - `invoq.VerifyWebhook(rawBody, headers, webhookSecret)` verifica um webhook e retorna `invoq.WebhookEvent`.
-- `invoq.IsInvoicePaid(event)` e `invoq.AsInvoicePaidEvent(event)` identificam eventos `invoice.paid` tipados.
+- `invoq.IsInvoicePaid(event)` e `invoq.AsInvoicePaidEvent(event)` identificam eventos `invoice.paid` tipados. `invoq.IsInvoicePaymentReversed(event)` e `invoq.AsInvoicePaymentReversedEvent(event)` fazem o mesmo para `invoice.payment_reversed`. Os dois rejeitam um evento malformado; um tipo de evento que esta versão do SDK ainda não modela continua sendo verificado e devolvido como veio.
 - O SDK detecta a versão do seu módulo Go a partir das informações de build para o `User-Agent`. Tags lançadas como `v0.1.0` são enviadas sem o prefixo `v`; builds locais a partir do código-fonte, sem uma versão de módulo, usam `unknown`.
+
+`Invoices.Get` retorna o formato de fatura pública usado pela página de checkout hospedada: o formato da resposta de criação mais `AmountPaid`, `Project` e `Transfers`, sem `ReferenceID`. Use a resposta de criação ou o webhook `invoice.paid` quando precisar do seu `reference_id` de comerciante.
+
+Dois campos de status. `Status` é o contábil — `unpaid`, `partially_paid`, `paid`, `settling`, `settled`, `review_required` — e os três valores equivalentes a pago diferem apenas em quanto os fundos já andaram até a sua carteira. `CheckoutStatus` é o que o pagador vê — `open`, `confirming`, `expired`, `paid`, `unavailable` — e nunca autoriza processar o pedido. `PaymentRevision` sobe sempre que o conjunto de pagamentos confirmados muda, então você descarta um snapshot mais antigo do que o que já tem.
+
+Os valores nas respostas são normalizados para 4 casas decimais: crie com `129` e a fatura devolve `Amount` `129.0000`. Compare valores numericamente, não como texto. `AmountDue` é derivado como `max(amount - amount_paid, 0)` e usa a mesma escala de 18 casas decimais de `AmountPaid`; `AmountOverpaid` é o espelho dele, `max(amount_paid - amount, 0)`, então você nunca precisa subtrair dinheiro por conta própria.
+
+`PaymentOptions` guarda as instruções de pagamento, fixadas na criação e `[]` no modo de teste. As entradas são discriminadas por `Status` e depois por `CollectionMethod`: só `ready` é pagável, `evm_deposit` traz `DepositAddress` e `SuggestedAmount`, `direct_exact` traz `RecipientAddress` e um `ExactAmount` que o comprador precisa enviar até o último dígito. Esses campos de instrução são `nil` em qualquer outra entrada, e a identidade de uma opção é `(ChainNamespace, ChainReference, TokenAddress)`, nunca a posição dela no slice. `Transfers` é o registro confirmado de recebimentos — `TransactionID`, `EventIndex`, `Amount`, `ExplorerTransactionURL` — e fica `[]` até um pagamento confirmar. Referência completa: [documentação da API REST](https://github.com/invoqmoney/api).

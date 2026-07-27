@@ -36,6 +36,7 @@ go get github.com/invoqmoney/sdk-go
 1. เข้าสู่ระบบ[แดชบอร์ด invoq](https://app.invoq.money) แล้วสร้างโปรเจกต์
 2. ที่หน้า **API keys** สร้างคีย์ลับ (secret key) ขึ้นมา คีย์ทดสอบขึ้นต้นด้วย `sk_test_` คีย์จริงขึ้นต้นด้วย `sk_live_` โหมดของคีย์เป็นตัวกำหนดว่าใบแจ้งหนี้ที่สร้างจะเป็นแบบทดสอบหรือของจริง
 3. ในการตั้งค่า **webhooks** ของโปรเจกต์ บันทึก URL ของ webhook ที่จะใช้ ซีเคร็ตของ webhook (`whsec_...`) สำหรับโหมดนั้นจะแสดงแค่ครั้งเดียวตอนเปิดใช้ webhook ครั้งแรก — รีบเก็บไว้ทันที URL ของ webhook ต้องเป็น HTTPS ที่เข้าถึงได้แบบสาธารณะ
+4. ตั้งค่า **Receiving wallet** ของคุณก่อนเปิดใช้งานจริง ใบแจ้งหนี้ทดสอบไม่ต้องใช้ แต่ใบแจ้งหนี้จริงที่ไม่มีปลายทางให้เงินเข้าจะล้มเหลวด้วย `409 no_payment_options_available`
 
 เพิ่มทั้งสองค่าเข้าเป็นตัวแปรสภาพแวดล้อมของเซิร์ฟเวอร์:
 
@@ -110,7 +111,6 @@ ctx := context.Background()
 
 invoice, err := client.Invoices.Create(ctx, invoq.CreateInvoiceInput{
 	Amount:      "129",
-	Currency:    invoq.InvoiceCurrencyUSD,
 	Description: invoq.String("SaaS boilerplate"),
 	ReferenceID: invoq.String("order_1234"),
 	ReturnURL:   invoq.StringOrNull("https://merchant.example/thanks"),
@@ -125,7 +125,7 @@ _ = invoice.ID
 หมายเหตุ:
 
 - กำหนดยอดเงินที่ฝั่งเซิร์ฟเวอร์เท่านั้น อย่าเชื่อยอดเงินที่ส่งมาจากฝั่งไคลเอนต์
-- `amount` เป็นสตริงเลขทศนิยมสกุล USD ตั้งแต่ `0.01` ถึง `1000000.00` ทศนิยมไม่เกิน 2 ตำแหน่ง เช่น `129` หรือ `129.99`
+- `amount` เป็นสตริงเลขทศนิยมสกุล USD ตั้งแต่ `0.01` ถึง `1000000.00` ทศนิยมไม่เกิน 2 ตำแหน่ง เช่น `129` หรือ `129.99` สกุลเงินเป็น USD เสมอ ส่วนโหมดทดสอบหรือโหมดจริงมาจากคีย์ ทั้งสองอย่างไม่ใช่ฟิลด์ใน request
 - ใช้ `reference_id` เพื่อโยง webhook `invoice.paid` กลับไปหาคำสั่งซื้อของคุณ และยังทำให้การสร้างใบแจ้งหนี้ลองใหม่ได้อย่างปลอดภัย: ถ้าสร้างซ้ำด้วย `reference_id` เดิมและเงื่อนไขเดิม จะได้ใบแจ้งหนี้ใบเดิมกลับมาแทนที่จะเกิดใบซ้ำ ส่วนเงื่อนไขที่ต่างกันจะล้มเหลวด้วยข้อผิดพลาด API `409 reference_id_conflict`
 - ใช้ `invoq.String(...)` สำหรับสตริงใน request ที่ไม่บังคับ ใช้ `invoq.StringOrNull(...)` เพื่อกำหนด `return_url`, ใช้ `invoq.NullString()` เพื่อส่งค่า JSON `null` และปล่อยฟิลด์ไว้โดยไม่กำหนดค่าเพื่อละเว้นฟิลด์นั้น
 
@@ -154,7 +154,7 @@ _ = paidInvoice.Status // invoq.InvoiceStatusPaid เมื่อจ่ายค
 
 `CreateTestPayment` ใช้ได้เฉพาะกับใบแจ้งหนี้ที่สร้างด้วยคีย์ `sk_test_` เมื่อยอดจ่ายครบตามจำนวนของใบแจ้งหนี้ ใบแจ้งหนี้จะกลายเป็น `paid` แล้ว invoq จะส่ง webhook `invoice.paid` ที่ลงลายเซ็นจริงไปยัง URL webhook ทดสอบของคุณ จ่ายบางส่วนก็ได้ ผลจะเป็น `partially_paid`
 
-ถ้าอยากรับ webhook บนเครื่องตัวเอง ให้เปิดเซิร์ฟเวอร์ในเครื่องออกสู่ภายนอกผ่าน HTTPS tunnel อย่าง ngrok หรือ cloudflared แล้วบันทึก URL ของ tunnel เป็น URL webhook ทดสอบในแดชบอร์ด แดชบอร์ดยังส่ง `webhook.ping` แบบมีลายเซ็นมาให้เช็กการเชื่อมต่อได้ด้วย
+ถ้าอยากรับ webhook บนเครื่องตัวเอง ให้เปิดเซิร์ฟเวอร์ในเครื่องออกสู่ภายนอกผ่าน HTTPS tunnel อย่าง ngrok หรือ cloudflared แล้วบันทึก URL ของ tunnel เป็น URL webhook ทดสอบในแดชบอร์ด
 
 ## Webhooks
 
@@ -193,9 +193,11 @@ func handleWebhook(response http.ResponseWriter, request *http.Request) {
 }
 ```
 
-ให้ยึด webhook `invoice.paid` เป็นหลักในการจัดการคำสั่งซื้อบนเซิร์ฟเวอร์ เมื่อ `IsInvoicePaid(event)` เป็น true แปลว่าใบแจ้งหนี้พร้อมให้จัดการอัตโนมัติแล้ว โดยสถานะของใบแจ้งหนี้จะเป็น `paid`, `settling` หรือ `settled` ใบแจ้งหนี้สถานะ `review_required` จะยังไม่ส่ง webhook `invoice.paid` ให้รอ webhook `invoice.paid` ที่จะส่งตามมาหลังการตรวจสอบผ่าน
+ให้ยึด webhook `invoice.paid` เป็นหลักในการจัดการคำสั่งซื้อบนเซิร์ฟเวอร์ เมื่อ `IsInvoicePaid(event)` เป็น true แปลว่าใบแจ้งหนี้พร้อมให้จัดการอัตโนมัติแล้ว โดยสถานะของใบแจ้งหนี้จะเป็น `paid`, `settling` หรือ `settled` ใบแจ้งหนี้สถานะ `review_required` จะไม่ส่ง `invoice.paid` เลยจนกว่าการตรวจสอบจะผ่าน
 
-การส่งที่ล้มเหลวจะถูกส่งซ้ำ ดังนั้นให้จัดการคำสั่งซื้ออย่างปลอดภัยเมื่อรับซ้ำโดยอิง `reference_id` หรือ `id` ของใบแจ้งหนี้ และทำให้การส่งซ้ำไม่เกิดผลอะไร ตอบกลับด้วย 2xx ให้เร็ว สถานะอื่นใดถือว่าส่งไม่สำเร็จ
+invoq จะส่ง `invoice.payment_reversed` ด้วย เมื่อใบแจ้งหนี้ที่เคยชำระแล้วกลับลงมาต่ำกว่ายอดอีกครั้ง เช่น เมื่อการ reorg ของเชนทำให้ธุรกรรมที่ยืนยันแล้วหลุดไป ให้ดักด้วย `invoq.IsInvoicePaymentReversed(event)` แล้วถอดค่าด้วย `invoq.AsInvoicePaymentReversedEvent(event)` จากนั้นพักหรือย้อนการจัดการคำสั่งซื้อตามนโยบายของคุณเอง
+
+การส่งที่ล้มเหลวจะถูกส่งซ้ำ (สูงสุด 5 ครั้ง โดยเว้นระยะ 1 นาที, 5 นาที, 30 นาที แล้ว 2 ชั่วโมง) ดังนั้นให้จัดการคำสั่งซื้ออย่างปลอดภัยเมื่อรับซ้ำโดยอิง `reference_id` หรือ `id` ของใบแจ้งหนี้ และทำให้การส่งซ้ำไม่เกิดผลอะไร ลำดับการมาถึงก็ไม่รับประกัน ให้เก็บสแนปช็อตที่ `payment_revision` สูงสุดไว้ ตอบกลับด้วย 2xx ให้เร็ว สถานะอื่นใดถือว่าส่งไม่สำเร็จและจะถูกส่งซ้ำ รวมถึง redirect และ `4xx` ด้วย
 
 `VerifyWebhook` รับ `http.Header` ใช้ `VerifyWebhookWithSignature` เมื่อคุณมีค่าเฮดเดอร์ `invoq-signature` อยู่แล้ว
 
@@ -236,9 +238,17 @@ client, err := invoq.New(apiKey,
 )
 ```
 
-- `client.Invoices.Create(ctx, input)` สร้างใบแจ้งหนี้ โดย `input` ประกอบด้วย `Amount` (จำเป็น), `Currency` (`InvoiceCurrencyUSD` เป็นค่าเริ่มต้น), `Description`, `ReferenceID`, `ReturnURL`
+- `client.Invoices.Create(ctx, input)` สร้างใบแจ้งหนี้ โดย `input` ประกอบด้วย `Amount` (จำเป็น), `Description`, `ReferenceID`, `ReturnURL`
 - `client.Invoices.Get(ctx, invoiceID)` ดึงข้อมูลใบแจ้งหนี้สาธารณะและคืนค่า `*invoq.PublicInvoice`
 - `client.Invoices.CreateTestPayment(ctx, invoiceID, input)` จำลองการจ่ายบนใบแจ้งหนี้ทดสอบและคืนค่า `*invoq.TestPaymentInvoice`
 - `invoq.VerifyWebhook(rawBody, headers, webhookSecret)` ตรวจสอบ webhook และคืนค่า `invoq.WebhookEvent`
-- `invoq.IsInvoicePaid(event)` และ `invoq.AsInvoicePaidEvent(event)` ใช้ระบุเหตุการณ์ `invoice.paid` แบบมีชนิดข้อมูล
+- `invoq.IsInvoicePaid(event)` และ `invoq.AsInvoicePaidEvent(event)` ใช้ระบุเหตุการณ์ `invoice.paid` แบบมีชนิดข้อมูล `invoq.IsInvoicePaymentReversed(event)` และ `invoq.AsInvoicePaymentReversedEvent(event)` ทำแบบเดียวกันกับ `invoice.payment_reversed` ทั้งคู่จะปฏิเสธเหตุการณ์ที่รูปแบบไม่ถูกต้อง ส่วนชนิดเหตุการณ์ที่ SDK เวอร์ชันนี้ยังไม่รู้จักก็ยังผ่านการตรวจลายเซ็นและถูกคืนมาตามเดิม
 - SDK จะตรวจหาเวอร์ชันโมดูล Go ของตัวเองจากข้อมูล build เพื่อใช้กับ `User-Agent` แท็กที่รีลีสแล้วอย่าง `v0.1.0` จะถูกส่งโดยตัดคำนำหน้า `v` ออก ส่วนการ build จากซอร์สในเครื่องที่ไม่มีเวอร์ชันโมดูลจะใช้ค่า `unknown`
+
+`Invoices.Get` จะคืนรูปแบบใบแจ้งหนี้สาธารณะที่หน้า checkout แบบโฮสต์ใช้ คือรูปแบบเดียวกับ response ตอนสร้าง บวก `AmountPaid`, `Project` และ `Transfers` แต่ไม่มี `ReferenceID` ถ้าต้องใช้ `reference_id` ฝั่ง merchant ให้ใช้ response ตอนสร้างใบแจ้งหนี้หรือ webhook `invoice.paid`
+
+ใบแจ้งหนี้มีฟิลด์สถานะสองตัว `Status` คือสถานะทางบัญชี ได้แก่ `unpaid`, `partially_paid`, `paid`, `settling`, `settled`, `review_required` โดยสามค่าที่ถือว่าชำระแล้วต่างกันแค่ว่าเงินเดินทางไปถึงกระเป๋าเงินของคุณไกลแค่ไหน ส่วน `CheckoutStatus` คือสถานะที่ผู้จ่ายเห็น ได้แก่ `open`, `confirming`, `expired`, `paid`, `unavailable` และไม่เคยเป็นสิ่งที่อนุญาตให้จัดการคำสั่งซื้อ `PaymentRevision` เพิ่มขึ้นทุกครั้งที่ชุดการชำระเงินที่ยืนยันแล้วเปลี่ยนไป คุณจึงทิ้งสแนปช็อตที่เก่ากว่าของที่ถืออยู่ได้
+
+ยอดเงินในการตอบกลับถูกปรับให้เป็นทศนิยม 4 ตำแหน่งเสมอ: สร้างด้วย `129` ใบแจ้งหนี้จะตอบกลับ `Amount` `129.0000` เวลาจะเทียบยอดเงินให้เทียบเป็นตัวเลข อย่าเทียบเป็นสตริง `AmountDue` คำนวณจาก `max(amount - amount_paid, 0)` และใช้สเกลทศนิยม 18 ตำแหน่งเหมือน `AmountPaid` ขณะที่ `AmountOverpaid` เป็นภาพสะท้อนของมัน คือ `max(amount_paid - amount, 0)` คุณจึงไม่ต้องลบเงินเอง
+
+`PaymentOptions` เก็บคำสั่งการชำระเงินไว้ ถูกกำหนดตายตัวตอนสร้างและเป็น `[]` ในโหมดทดสอบ แต่ละรายการแยกด้วย `Status` แล้วจึงแยกด้วย `CollectionMethod` มีเฉพาะ `ready` ที่จ่ายได้ `evm_deposit` จะมี `DepositAddress` และ `SuggestedAmount` ส่วน `direct_exact` จะมี `RecipientAddress` และ `ExactAmount` ที่ผู้ซื้อต้องโอนให้ตรงทุกหลัก ฟิลด์คำสั่งเหล่านี้จะเป็น `nil` ในรายการอื่นทั้งหมด และตัวระบุของแต่ละตัวเลือกคือ `(ChainNamespace, ChainReference, TokenAddress)` ไม่ใช่ตำแหน่งใน slice `Transfers` คือรายการรับเงินที่ยืนยันแล้ว — `TransactionID`, `EventIndex`, `Amount`, `ExplorerTransactionURL` — และเป็น `[]` จนกว่าจะมีการชำระเงินที่ยืนยันแล้ว รายละเอียดทุกฟิลด์: [เอกสาร REST API](https://github.com/invoqmoney/api)

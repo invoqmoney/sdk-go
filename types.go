@@ -20,7 +20,9 @@ const (
 	InvoiceCurrencyUSD InvoiceCurrency = "USD"
 )
 
-// InvoiceStatus is the lifecycle status returned with invoice API responses.
+// InvoiceStatus is the accounting status returned with invoice API responses.
+// Paid, settling, and settled all mean the buyer paid and differ only in how far
+// the funds have moved; review_required is not a paid state.
 type InvoiceStatus string
 
 const (
@@ -38,27 +40,7 @@ const (
 	InvoiceStatusReviewRequired InvoiceStatus = "review_required"
 )
 
-// InvoicePaymentStatus is the payment status returned by public invoice reads.
-type InvoicePaymentStatus string
-
-const (
-	// InvoicePaymentStatusUnpaid means no payment has been detected.
-	InvoicePaymentStatusUnpaid InvoicePaymentStatus = "unpaid"
-	// InvoicePaymentStatusPartiallyPaid means less than the requested amount has been detected.
-	InvoicePaymentStatusPartiallyPaid InvoicePaymentStatus = "partially_paid"
-	// InvoicePaymentStatusConfirming means payment has been detected and is still confirming.
-	InvoicePaymentStatusConfirming InvoicePaymentStatus = "confirming"
-	// InvoicePaymentStatusPaid means enough funds have been received for automatic fulfillment.
-	InvoicePaymentStatusPaid InvoicePaymentStatus = "paid"
-	// InvoicePaymentStatusSettling means payment is complete and settlement is in progress.
-	InvoicePaymentStatusSettling InvoicePaymentStatus = "settling"
-	// InvoicePaymentStatusSettled means payment settlement is complete.
-	InvoicePaymentStatusSettled InvoicePaymentStatus = "settled"
-	// InvoicePaymentStatusReviewRequired means payment requires manual review.
-	InvoicePaymentStatusReviewRequired InvoicePaymentStatus = "review_required"
-)
-
-// InvoicePaidStatus is a status that can emit an invoice.paid webhook.
+// InvoicePaidStatus is a status that can carry an invoice.paid webhook.
 type InvoicePaidStatus string
 
 const (
@@ -70,14 +52,63 @@ const (
 	InvoicePaidStatusSettled InvoicePaidStatus = "settled"
 )
 
-// MonitoringStatus is the server-computed state of the invoice's deposit-address monitoring window.
-type MonitoringStatus string
+// CheckoutStatus is the payer-facing state, derived on every response. It never
+// authorizes fulfillment: use the invoice.paid webhook for that.
+type CheckoutStatus string
 
 const (
-	// MonitoringStatusActive means the invoice's deposit address is still being watched for payments.
-	MonitoringStatusActive MonitoringStatus = "active"
-	// MonitoringStatusEnded means the invoice's deposit address is no longer being watched.
-	MonitoringStatusEnded MonitoringStatus = "ended"
+	// CheckoutStatusPaid means the invoice has been paid in full.
+	CheckoutStatusPaid CheckoutStatus = "paid"
+	// CheckoutStatusConfirming means payment evidence is on chain but not confirmed yet.
+	CheckoutStatusConfirming CheckoutStatus = "confirming"
+	// CheckoutStatusExpired means the payment window closed at monitoring_ends_at.
+	CheckoutStatusExpired CheckoutStatus = "expired"
+	// CheckoutStatusOpen means at least one payment option is ready to pay.
+	CheckoutStatusOpen CheckoutStatus = "open"
+	// CheckoutStatusUnavailable means no payment option can be paid right now.
+	CheckoutStatusUnavailable CheckoutStatus = "unavailable"
+)
+
+// ChainNamespace is the namespace of a chain invoq supports.
+type ChainNamespace string
+
+const (
+	// ChainNamespaceEIP155 is the EVM chain namespace.
+	ChainNamespaceEIP155 ChainNamespace = "eip155"
+	// ChainNamespaceSolana is the Solana chain namespace.
+	ChainNamespaceSolana ChainNamespace = "solana"
+	// ChainNamespaceTron is the TRON chain namespace.
+	ChainNamespaceTron ChainNamespace = "tron"
+)
+
+// PaymentOptionCollectionMethod is how a payment option collects funds.
+type PaymentOptionCollectionMethod string
+
+const (
+	// PaymentOptionCollectionMethodEVMDeposit collects any on-time transfer to a per-invoice deposit address.
+	PaymentOptionCollectionMethodEVMDeposit PaymentOptionCollectionMethod = "evm_deposit"
+	// PaymentOptionCollectionMethodDirectExact collects one exact-amount transfer to the merchant's own address.
+	PaymentOptionCollectionMethodDirectExact PaymentOptionCollectionMethod = "direct_exact"
+)
+
+// PaymentOptionStatus is whether a payment option can be paid right now.
+type PaymentOptionStatus string
+
+const (
+	// PaymentOptionStatusReady means the option carries payment instructions and can be paid.
+	PaymentOptionStatusReady PaymentOptionStatus = "ready"
+	// PaymentOptionStatusUnavailable means the option carries no payment instructions.
+	PaymentOptionStatusUnavailable PaymentOptionStatus = "unavailable"
+)
+
+// WebhookEventType is a webhook event type this SDK models.
+type WebhookEventType string
+
+const (
+	// WebhookEventTypeInvoicePaid is the invoice.paid event type.
+	WebhookEventTypeInvoicePaid WebhookEventType = "invoice.paid"
+	// WebhookEventTypeInvoicePaymentReversed is the invoice.payment_reversed event type.
+	WebhookEventTypeInvoicePaymentReversed WebhookEventType = "invoice.payment_reversed"
 )
 
 // APIErrorLocation is the location of a field-level API error.
@@ -102,17 +133,48 @@ type APIErrorField struct {
 	Message  string           `json:"message"`
 }
 
-// DirectOnchainRail is a direct-onchain payment rail returned with invoice payment instructions.
-type DirectOnchainRail struct {
-	ChainNamespace string  `json:"chain_namespace"`
-	ChainReference string  `json:"chain_reference"`
-	TokenAddress   string  `json:"token_address"`
-	NetworkLabel   string  `json:"network_label"`
-	DisplaySymbol  string  `json:"display_symbol"`
-	LogoURL        *string `json:"logo_url"`
-	ChainLogoURL   *string `json:"chain_logo_url"`
-	NetworkFeeUSD  string  `json:"network_fee_usd"`
-	ETASeconds     int64   `json:"eta_seconds"`
+// PaymentOption is one issued way to pay an invoice, fixed when the invoice is
+// created: a receiving address or rail configured later never rewrites it. Only
+// Status is re-evaluated per response, and only PaymentOptionStatusReady can be
+// paid.
+//
+// The instruction fields below are carried by one (Status, CollectionMethod)
+// combination each and are nil on every other one, so a nil pointer means the
+// field was absent from the response rather than empty. Identify an option by
+// the (ChainNamespace, ChainReference, TokenAddress) triple, never by its
+// position in the slice.
+type PaymentOption struct {
+	CollectionMethod PaymentOptionCollectionMethod `json:"collection_method"`
+	ChainNamespace   ChainNamespace                `json:"chain_namespace"`
+	ChainReference   string                        `json:"chain_reference"`
+	Currency         InvoiceCurrency               `json:"currency"`
+	TokenAddress     string                        `json:"token_address"`
+	TokenDecimals    int64                         `json:"token_decimals"`
+	NetworkLabel     string                        `json:"network_label"`
+	DisplaySymbol    string                        `json:"display_symbol"`
+	LogoURL          *string                       `json:"logo_url"`
+	ChainLogoURL     *string                       `json:"chain_logo_url"`
+	Status           PaymentOptionStatus           `json:"status"`
+
+	// DepositAddress is set on ready evm_deposit options only. The address
+	// belongs to this invoice alone, and any on-time transfer to it is credited.
+	DepositAddress *string `json:"deposit_address,omitempty"`
+	// SuggestedAmount is set on ready evm_deposit options only. It is guidance,
+	// not a matching requirement, and can exceed AmountDue by one token unit.
+	SuggestedAmount *string `json:"suggested_amount,omitempty"`
+
+	// RecipientAddress is set on ready direct_exact options only. It is the
+	// merchant's own address.
+	RecipientAddress *string `json:"recipient_address,omitempty"`
+	// InvoiceAmount is set on ready direct_exact options only.
+	InvoiceAmount *string `json:"invoice_amount,omitempty"`
+	// MatchingIncrement is set on ready direct_exact options only. It attributes
+	// the payment to this invoice and is never credited as invoice payment.
+	MatchingIncrement *string `json:"matching_increment,omitempty"`
+	// ExactAmount is set on ready direct_exact options only. The buyer must send
+	// exactly this amount, InvoiceAmount plus MatchingIncrement, in one transfer.
+	// All three carry exactly TokenDecimals fractional digits.
+	ExactAmount *string `json:"exact_amount,omitempty"`
 }
 
 // PublicInvoiceProject is payer-visible project branding returned by public invoice reads.
@@ -122,29 +184,47 @@ type PublicInvoiceProject struct {
 	LogoURL *string `json:"logo_url"`
 }
 
-// PublicInvoiceTransfer is one confirmed inbound transfer credited to the invoice, part of the payer-facing receipt trail.
+// PublicInvoiceTransfer is one confirmed inbound transfer credited to the
+// invoice, part of the payer-facing receipt trail. Amount is in invoice currency
+// at the scale of AmountPaid and excludes a direct_exact matching increment.
+// TransactionID is not unique on its own: one transaction can carry several
+// credits, which EventIndex separates.
 type PublicInvoiceTransfer struct {
-	TxHash        string  `json:"tx_hash"`
-	Amount        string  `json:"amount"`
-	ExplorerTxURL *string `json:"explorer_tx_url"`
+	ChainNamespace         ChainNamespace `json:"chain_namespace"`
+	ChainReference         string         `json:"chain_reference"`
+	TransactionID          string         `json:"transaction_id"`
+	EventIndex             int64          `json:"event_index"`
+	Amount                 string         `json:"amount"`
+	ExplorerTransactionURL *string        `json:"explorer_transaction_url"`
 }
 
 // Invoice is returned when creating an invoice.
 type Invoice struct {
-	ID                 string              `json:"id"`
-	Mode               InvoiceMode         `json:"mode"`
-	Amount             string              `json:"amount"`
-	Currency           InvoiceCurrency     `json:"currency"`
-	ReferenceID        *string             `json:"reference_id"`
-	Description        *string             `json:"description"`
-	ReturnURL          *string             `json:"return_url"`
-	DepositAddress     *string             `json:"deposit_address"`
-	Status             InvoiceStatus       `json:"status"`
-	AmountDue          string              `json:"amount_due"`
-	AmountOverpaid     string              `json:"amount_overpaid"`
-	MonitoringEndsAt   *string             `json:"monitoring_ends_at"`
-	MonitoringStatus   *MonitoringStatus   `json:"monitoring_status"`
-	DirectOnchainRails []DirectOnchainRail `json:"direct_onchain_rails"`
+	ID          string          `json:"id"`
+	Mode        InvoiceMode     `json:"mode"`
+	Amount      string          `json:"amount"`
+	Currency    InvoiceCurrency `json:"currency"`
+	ReferenceID *string         `json:"reference_id"`
+	Description *string         `json:"description"`
+	ReturnURL   *string         `json:"return_url"`
+	Status      InvoiceStatus   `json:"status"`
+	// CheckoutStatus is payer-facing and never authorizes fulfillment.
+	CheckoutStatus CheckoutStatus `json:"checkout_status"`
+	// PaymentRevision increments whenever the confirmed payment set changes;
+	// settlement alone does not move it. Use it to discard a snapshot older than
+	// one you already hold.
+	PaymentRevision int64 `json:"payment_revision"`
+	// AmountDue and AmountOverpaid are max(amount - amount_paid, 0) and
+	// max(amount_paid - amount, 0), both at the 18-decimal scale of amount_paid.
+	// Read these instead of subtracting money yourself.
+	AmountDue      string `json:"amount_due"`
+	AmountOverpaid string `json:"amount_overpaid"`
+	// MonitoringEndsAt is one day after creation and is the only payment window.
+	// It is nil in test mode.
+	MonitoringEndsAt *string `json:"monitoring_ends_at"`
+	// PaymentOptions is the only place payment instructions live. It is empty in
+	// test mode.
+	PaymentOptions []PaymentOption `json:"payment_options"`
 }
 
 // TestPaymentInvoice is returned after simulating payment on a test invoice.
@@ -154,31 +234,34 @@ type TestPaymentInvoice struct {
 	FullyPaidAt *string `json:"fully_paid_at"`
 }
 
-// PublicInvoice is returned when fetching an invoice by ID.
+// PublicInvoice is returned when fetching an invoice by ID. It is the create
+// shape plus Project, AmountPaid, and Transfers, minus ReferenceID.
 type PublicInvoice struct {
-	ID                 string                  `json:"id"`
-	Mode               InvoiceMode             `json:"mode"`
-	Amount             string                  `json:"amount"`
-	Currency           InvoiceCurrency         `json:"currency"`
-	Description        *string                 `json:"description"`
-	ReturnURL          *string                 `json:"return_url"`
-	DepositAddress     *string                 `json:"deposit_address"`
-	Status             InvoiceStatus           `json:"status"`
-	AmountDue          string                  `json:"amount_due"`
-	AmountOverpaid     string                  `json:"amount_overpaid"`
-	MonitoringEndsAt   *string                 `json:"monitoring_ends_at"`
-	MonitoringStatus   *MonitoringStatus       `json:"monitoring_status"`
-	DirectOnchainRails []DirectOnchainRail     `json:"direct_onchain_rails"`
-	AmountPaid         string                  `json:"amount_paid"`
-	PaymentStatus      InvoicePaymentStatus    `json:"payment_status"`
-	Project            PublicInvoiceProject    `json:"project"`
-	Transfers          []PublicInvoiceTransfer `json:"transfers"`
+	ID              string               `json:"id"`
+	Mode            InvoiceMode          `json:"mode"`
+	Amount          string               `json:"amount"`
+	Currency        InvoiceCurrency      `json:"currency"`
+	Description     *string              `json:"description"`
+	ReturnURL       *string              `json:"return_url"`
+	Project         PublicInvoiceProject `json:"project"`
+	Status          InvoiceStatus        `json:"status"`
+	CheckoutStatus  CheckoutStatus       `json:"checkout_status"`
+	PaymentRevision int64                `json:"payment_revision"`
+	AmountPaid      string               `json:"amount_paid"`
+	AmountDue       string               `json:"amount_due"`
+	AmountOverpaid  string               `json:"amount_overpaid"`
+	// Transfers holds the confirmed receipts, at most the 20 largest, largest
+	// first. It is empty in test mode.
+	Transfers        []PublicInvoiceTransfer `json:"transfers"`
+	MonitoringEndsAt *string                 `json:"monitoring_ends_at"`
+	PaymentOptions   []PaymentOption         `json:"payment_options"`
 }
 
-// CreateInvoiceInput is the input for creating an invoice.
+// CreateInvoiceInput is the input for creating an invoice. These four fields are
+// the whole request body: currency is fixed to USD, mode comes from the API key,
+// and the API rejects unknown body keys.
 type CreateInvoiceInput struct {
 	Amount      string          `json:"amount"`
-	Currency    InvoiceCurrency `json:"currency,omitempty"`
 	Description *string         `json:"description,omitempty"`
 	ReferenceID *string         `json:"reference_id,omitempty"`
 	ReturnURL   *NullableString `json:"return_url,omitempty"`
@@ -191,15 +274,18 @@ type CreateTestPaymentInput struct {
 }
 
 // InvoicePaidEventInvoice is the invoice payload for an invoice.paid event.
+// Payment instructions and return_url are absent by design: reconcile by invoice
+// ID plus ReferenceID.
 type InvoicePaidEventInvoice struct {
-	ID          string            `json:"id"`
-	Mode        InvoiceMode       `json:"mode"`
-	Status      InvoicePaidStatus `json:"status"`
-	Amount      string            `json:"amount"`
-	Currency    InvoiceCurrency   `json:"currency"`
-	AmountPaid  string            `json:"amount_paid"`
-	ReferenceID *string           `json:"reference_id"`
-	FullyPaidAt *string           `json:"fully_paid_at"`
+	ID              string            `json:"id"`
+	Mode            InvoiceMode       `json:"mode"`
+	Status          InvoicePaidStatus `json:"status"`
+	Amount          string            `json:"amount"`
+	Currency        InvoiceCurrency   `json:"currency"`
+	AmountPaid      string            `json:"amount_paid"`
+	ReferenceID     *string           `json:"reference_id"`
+	PaymentRevision int64             `json:"payment_revision"`
+	FullyPaidAt     *string           `json:"fully_paid_at"`
 }
 
 // InvoicePaidEventData is the data payload for an invoice.paid event.
@@ -210,10 +296,42 @@ type InvoicePaidEventData struct {
 // InvoicePaidEvent is the known invoice.paid webhook event.
 type InvoicePaidEvent struct {
 	ID        string               `json:"id"`
-	Type      string               `json:"type"`
+	Type      WebhookEventType     `json:"type"`
 	Mode      InvoiceMode          `json:"mode"`
 	CreatedAt string               `json:"created_at"`
 	Data      InvoicePaidEventData `json:"data"`
+}
+
+// InvoicePaymentReversedEventInvoice is the invoice payload for an
+// invoice.payment_reversed event. It carries the invoice's current status, which
+// is any InvoiceStatus, a higher PaymentRevision than the payment it reverses,
+// and a nil FullyPaidAt.
+type InvoicePaymentReversedEventInvoice struct {
+	ID              string          `json:"id"`
+	Mode            InvoiceMode     `json:"mode"`
+	Status          InvoiceStatus   `json:"status"`
+	Amount          string          `json:"amount"`
+	Currency        InvoiceCurrency `json:"currency"`
+	AmountPaid      string          `json:"amount_paid"`
+	ReferenceID     *string         `json:"reference_id"`
+	PaymentRevision int64           `json:"payment_revision"`
+	FullyPaidAt     *string         `json:"fully_paid_at"`
+}
+
+// InvoicePaymentReversedEventData is the data payload for an invoice.payment_reversed event.
+type InvoicePaymentReversedEventData struct {
+	Invoice InvoicePaymentReversedEventInvoice `json:"invoice"`
+}
+
+// InvoicePaymentReversedEvent is the known invoice.payment_reversed webhook
+// event, sent when a previously paid invoice drops back below its amount, a
+// chain reorg removing a credited transfer for example.
+type InvoicePaymentReversedEvent struct {
+	ID        string                          `json:"id"`
+	Type      WebhookEventType                `json:"type"`
+	Mode      InvoiceMode                     `json:"mode"`
+	CreatedAt string                          `json:"created_at"`
+	Data      InvoicePaymentReversedEventData `json:"data"`
 }
 
 // WebhookEvent is a verified webhook event payload. Unknown future event types are preserved.
