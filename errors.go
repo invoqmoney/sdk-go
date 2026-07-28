@@ -134,8 +134,10 @@ func newAPIError(status int, payload any) *APIError {
 	errorPayload, _ := payload.(map[string]any)
 
 	code, _ := errorPayload["code"].(string)
-	message, _ := errorPayload["message"].(string)
-	if message == "" {
+	// An empty message the API really sent is kept; only an absent or wrong-typed
+	// one falls back.
+	message, ok := errorPayload["message"].(string)
+	if !ok {
 		message = "invoq API request failed."
 	}
 
@@ -164,15 +166,14 @@ func parseAPIErrorFields(value any) []APIErrorField {
 			continue
 		}
 
+		// A location this version does not know is passed through, not dropped:
+		// the caller is already on an error path and needs the code and message.
+		// Only a structurally invalid entry is discarded.
 		field, fieldOK := object["field"].(string)
 		location, locationOK := object["location"].(string)
 		code, codeOK := object["code"].(string)
 		message, messageOK := object["message"].(string)
 		if !fieldOK || !locationOK || !codeOK || !messageOK {
-			continue
-		}
-
-		if !isAPIErrorLocation(location) {
 			continue
 		}
 
@@ -184,10 +185,7 @@ func parseAPIErrorFields(value any) []APIErrorField {
 		})
 	}
 
-	if len(fields) == 0 {
-		return nil
-	}
-
+	// Empty but non-nil: nil is reserved for an absent or non-array `fields`.
 	return fields
 }
 
@@ -198,15 +196,6 @@ func parseAPIErrorMeta(value any) map[string]any {
 	}
 
 	return meta
-}
-
-func isAPIErrorLocation(value string) bool {
-	switch APIErrorLocation(value) {
-	case APIErrorLocationQuery, APIErrorLocationPath, APIErrorLocationBody, APIErrorLocationHeader:
-		return true
-	default:
-		return false
-	}
 }
 
 func unexpectedMarshalError(err error) *Error {

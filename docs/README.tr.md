@@ -8,6 +8,12 @@ invoq sunucu API'leri ve webhook doğrulaması için Go SDK'sı. Stablecoin fatu
 
 Bu modülü yalnızca sunucunuzda kullanın. Gizli anahtarları kabul eder ve istemci tarafı uygulamalara derlenmemelidir.
 
+**AI ile mi kod yazıyorsunuz? Bunu yapıştırın.**
+
+```
+invoq ile projeme stablecoin ödemesi ekle. Test modunda başla. Kod yazmadan önce belgeleri oku: https://invoq.money/llms.txt
+```
+
 ## Sunucu SDK'ları
 
 Bu dillerin herhangi biriyle arka ucunuzdan fatura oluşturun ve webhook'ları doğrulayın — aynı REST API, aynı webhook imzası. Bu repo, Go SDK'sıdır.
@@ -155,6 +161,16 @@ _ = paidInvoice.Status // tamamen ödendiğinde invoq.InvoiceStatusPaid
 `CreateTestPayment` yalnızca `sk_test_` anahtarıyla oluşturulmuş faturalarda çalışır. Ödemeler fatura tutarına ulaştığında fatura `paid` olur ve invoq, test webhook URL'nize gerçekten imzalanmış bir `invoice.paid` webhook'u gönderir. Kısmi tutarlara izin verilir; sonuç `partially_paid` olur.
 
 Webhook'ları kendi makinenizde almak için yerel sunucunuzu ngrok veya cloudflared gibi bir HTTPS tüneliyle dışa açın ve tünel URL'sini panelde test webhook URL'niz olarak kaydedin.
+
+## Barındırılan ödeme sayfası
+
+Her faturanın barındırılan bir ödeme sayfası da vardır:
+
+```text
+https://pay.invoq.money/<fatura id>
+```
+
+Sayfa içi ödeme penceresi uygun olmadığında bağlantıyı paylaşın ya da oraya yönlendirin.
 
 ## Webhook'lar
 

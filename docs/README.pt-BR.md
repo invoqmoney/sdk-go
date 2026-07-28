@@ -8,6 +8,12 @@ SDK Go para as APIs de servidor da invoq e verificação de webhooks. Crie fatur
 
 Use este módulo apenas no seu servidor. Ele aceita chaves secretas e não deve ser compilado em aplicações do lado do cliente.
 
+**Programa com IA? Cole isto.**
+
+```
+Adicione pagamentos em stablecoin ao meu projeto com invoq. Comece no modo de teste. Leia a documentação antes de escrever código: https://invoq.money/llms.txt
+```
+
 ## SDKs de servidor
 
 Crie faturas e verifique webhooks a partir do seu backend em qualquer uma destas linguagens — mesma REST API, mesma assinatura de webhook. Este repositório é o SDK de Go.
@@ -155,6 +161,16 @@ _ = paidInvoice.Status // invoq.InvoiceStatusPaid quando totalmente pago
 `CreateTestPayment` só funciona em faturas criadas com chave `sk_test_`. Quando os pagamentos atingem o valor da fatura, ela vira `paid` e a invoq envia um webhook `invoice.paid` assinado de verdade para a sua URL de webhook de teste. Valores parciais são permitidos e produzem `partially_paid`.
 
 Para receber webhooks na sua máquina, exponha o servidor local com um túnel HTTPS como ngrok ou cloudflared e salve a URL do túnel como URL de webhook de teste no painel.
+
+## Página de checkout hospedada
+
+Toda fatura também tem uma página de checkout hospedada em:
+
+```text
+https://pay.invoq.money/<id da fatura>
+```
+
+Compartilhe o link ou redirecione para lá quando uma janela de checkout dentro da página não encaixar.
 
 ## Webhooks
 

@@ -8,6 +8,12 @@ SDK Go pour les API serveur d’invoq et la vérification des webhooks. Créez d
 
 Utilisez ce module uniquement sur votre serveur. Il accepte des clés secrètes et ne doit pas être compilé dans des applications côté client.
 
+**Vous codez avec une IA ? Collez ceci.**
+
+```
+Ajoute les paiements en stablecoins à mon projet avec invoq. Commence en mode test. Lis la documentation avant de coder : https://invoq.money/llms.txt
+```
+
 ## SDK serveur
 
 Créez des factures et vérifiez les webhooks depuis votre backend dans l’un de ces langages — même REST API, même signature de webhook. Ce dépôt est le SDK Go.
@@ -155,6 +161,16 @@ _ = paidInvoice.Status // invoq.InvoiceStatusPaid une fois entièrement payée
 `CreateTestPayment` ne fonctionne que sur les factures créées avec une clé `sk_test_`. Quand les paiements atteignent le montant de la facture, celle-ci passe à `paid` et invoq envoie un vrai webhook `invoice.paid` signé à votre URL de webhook de test. Les montants partiels sont autorisés et produisent `partially_paid`.
 
 Pour recevoir des webhooks sur votre machine, exposez votre serveur local via un tunnel HTTPS comme ngrok ou cloudflared, et enregistrez l’URL du tunnel comme URL de webhook de test dans le tableau de bord.
+
+## Page de paiement hébergée
+
+Chaque facture dispose aussi d'une page de paiement hébergée à :
+
+```text
+https://pay.invoq.money/<id de facture>
+```
+
+Partagez le lien ou redirigez-y quand une fenêtre de paiement intégrée à la page ne convient pas.
 
 ## Webhooks
 

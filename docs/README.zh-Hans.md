@@ -8,6 +8,12 @@
 
 本模块只能在你的服务端使用。它需要密钥，绝不能被编译进客户端应用中。
 
+**在用 AI 写代码？把这段贴给它。**
+
+```
+用 invoq 给我的项目接入稳定币收款，从测试模式开始。写代码前先读文档 https://invoq.money/llms.txt
+```
+
 ## 服务端 SDK
 
 用下面任意一种语言，都能从你的后端创建账单、验证 webhook——REST API 和 webhook 签名完全一致。本仓库是 Go SDK。
@@ -155,6 +161,16 @@ _ = paidInvoice.Status // 完全付清时为 invoq.InvoiceStatusPaid
 `CreateTestPayment` 只对 `sk_test_` 密钥创建的账单有效。累计付款达到账单金额时，账单变为 `paid`，invoq 会向你的测试 webhook URL 发送一条真实签名的 `invoice.paid` webhook。也可以只付部分金额，账单会变成 `partially_paid`。
 
 要在本机收 webhook，用 ngrok、cloudflared 之类的 HTTPS 隧道把本地服务暴露出去，再把隧道地址保存为商户后台里的测试 webhook URL。
+
+## 托管收银页
+
+每张账单都自带一个托管收银页：
+
+```text
+https://pay.invoq.money/<账单 id>
+```
+
+当页内收银台弹窗不合适时，把链接发出去或直接跳转过去就行。
 
 ## Webhooks
 

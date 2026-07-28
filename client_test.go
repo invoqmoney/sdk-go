@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -496,7 +497,7 @@ func TestMapsAPIErrorEnvelopesToAPIError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
 		response.Header().Set("Content-Type", "application/json")
 		response.WriteHeader(http.StatusBadRequest)
-		_, _ = response.Write([]byte(`{"code":"invalid_request","message":"Invalid request.","fields":[{"location":"body","field":"amount","code":"required","message":"Required."}],"meta":{"request_id":"req_test"}}`))
+		_, _ = response.Write([]byte(`{"code":"invalid_request","message":"Invalid request.","fields":[{"location":"body","field":"amount","code":"required","message":"Required."},{"location":"unexpected","field":"currency","code":"unknown_field","message":"Unknown field."},{"location":"body","field":"description","message":"No code."}],"meta":{"request_id":"req_test"}}`))
 	}))
 	defer server.Close()
 
@@ -517,11 +518,42 @@ func TestMapsAPIErrorEnvelopesToAPIError(t *testing.T) {
 	if apiError.Code != "invalid_request" {
 		t.Fatalf("unexpected code: %s", apiError.Code)
 	}
-	if len(apiError.Fields) != 1 || apiError.Fields[0].Field != "amount" {
+	if len(apiError.Fields) != 2 || apiError.Fields[0].Field != "amount" {
+		t.Fatalf("unexpected fields: %#v", apiError.Fields)
+	}
+	if apiError.Fields[0].Location != APIErrorLocationBody {
+		t.Fatalf("unexpected location: %#v", apiError.Fields[0])
+	}
+	if apiError.Fields[1].Location != APIErrorLocation("unexpected") ||
+		apiError.Fields[1].Field != "currency" {
 		t.Fatalf("unexpected fields: %#v", apiError.Fields)
 	}
 	if apiError.Meta["request_id"] != "req_test" {
 		t.Fatalf("unexpected meta: %#v", apiError.Meta)
+	}
+}
+
+func TestPreservesEmptyAPIErrorFields(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+		response.Header().Set("Content-Type", "application/json")
+		response.WriteHeader(http.StatusBadRequest)
+		_, _ = response.Write([]byte(`{"code":"invalid_request","message":"Invalid request.","fields":[]}`))
+	}))
+	defer server.Close()
+
+	client, err := New("sk_test_123", WithAPIOrigin(server.URL))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = client.Invoices.Create(context.Background(), CreateInvoiceInput{Amount: "0.001"})
+	var apiError *APIError
+	if !errors.As(err, &apiError) {
+		t.Fatalf("expected APIError, got %T", err)
+	}
+
+	if apiError.Fields == nil || len(apiError.Fields) != 0 {
+		t.Fatalf("expected an empty non-nil slice, got %#v", apiError.Fields)
 	}
 }
 
@@ -625,24 +657,78 @@ func TestMissingDataEnvelopeReturnsSDKError(t *testing.T) {
 	}
 }
 
-func TestNullDataEnvelopeReturnsSDKError(t *testing.T) {
-	server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
-		_, _ = response.Write([]byte(`{"data":null}`))
-	}))
-	defer server.Close()
+func TestNonObjectDataEnvelopeReturnsSDKError(t *testing.T) {
+	for _, body := range []string{`{"data":null}`, `{"data":5}`, `{"data":[]}`, `{"data":"x"}`} {
+		server := httptest.NewServer(http.HandlerFunc(func(response http.ResponseWriter, request *http.Request) {
+			_, _ = response.Write([]byte(body))
+		}))
 
-	client, err := New("sk_test_123", WithAPIOrigin(server.URL))
+		client, err := New("sk_test_123", WithAPIOrigin(server.URL))
+		if err != nil {
+			server.Close()
+			t.Fatal(err)
+		}
+
+		_, err = client.Invoices.Create(context.Background(), CreateInvoiceInput{Amount: "1"})
+		server.Close()
+
+		var sdkError *Error
+		if !errors.As(err, &sdkError) {
+			t.Fatalf("%s: expected SDK error, got %T", body, err)
+		}
+		if !strings.Contains(sdkError.Error(), "data envelope was not an object") {
+			t.Fatalf("%s: unexpected error: %v", body, sdkError)
+		}
+		if sdkError.Payload == nil {
+			t.Fatalf("%s: expected the raw payload to be attached", body)
+		}
+	}
+}
+
+// A control character reaches the transport differently in every runtime — some
+// trim it and send, some send it raw. Rejected here so all six answer alike.
+func TestRejectsAPIKeysWithControlCharacters(t *testing.T) {
+	for _, key := range []string{"sk_test_x\r\nX-Injected: yes", "sk_test_x\n", "sk_test\x00x"} {
+		if _, err := New(key); !isSDKError(err) {
+			t.Fatalf("%q: expected SDK error, got %T", key, err)
+		}
+	}
+}
+
+// A log line that dumps the client must not carry the secret key.
+func TestClientValuesDoNotPrintTheAPIKey(t *testing.T) {
+	client, err := New("sk_live_SUPERSECRET")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	_, err = client.Invoices.Create(context.Background(), CreateInvoiceInput{Amount: "1"})
-	var sdkError *Error
-	if !errors.As(err, &sdkError) {
-		t.Fatalf("expected SDK error, got %T", err)
+	for _, printed := range []string{
+		fmt.Sprintf("%v", client.Invoices),
+		fmt.Sprintf("%+v", client.Invoices),
+		fmt.Sprintf("%#v", client.Invoices),
+		fmt.Sprintf("%v", *client.Invoices),
+		fmt.Sprintf("%+v", *client.Invoices),
+		fmt.Sprintf("%#v", *client.Invoices),
+	} {
+		if strings.Contains(printed, "SUPERSECRET") {
+			t.Fatalf("secret key leaked: %s", printed)
+		}
 	}
-	if !strings.Contains(sdkError.Error(), "data envelope was null") {
-		t.Fatalf("unexpected error: %v", sdkError)
+}
+
+func TestRejectsDotSegmentInvoiceIDs(t *testing.T) {
+	client, err := New("sk_test_123")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for _, id := range []string{".", ".."} {
+		if _, err := client.Invoices.Get(context.Background(), id); err == nil {
+			t.Fatalf("%q: expected an error", id)
+		}
+		if _, err := client.Invoices.CreateTestPayment(context.Background(), id, CreateTestPaymentInput{Amount: "1"}); err == nil {
+			t.Fatalf("%q: expected an error", id)
+		}
 	}
 }
 

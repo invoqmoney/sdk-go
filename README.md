@@ -8,6 +8,12 @@ invoices, simulate test payments, and fulfill orders from signed webhooks.
 Use this module only on your server. It accepts secret keys and must not be
 compiled into client-side applications.
 
+**Coding with AI? Paste this.**
+
+```
+Add stablecoin payments to my project with invoq. Start in test mode. Read the docs before you write any code: https://invoq.money/llms.txt
+```
+
 ## Server SDKs
 
 Create invoices and verify webhooks from your backend in any of these languages — same REST API, same webhook signature. This repository is the Go SDK.
@@ -178,6 +184,16 @@ allowed and produce `partially_paid`.
 To receive webhooks on your machine, expose your local server with an HTTPS
 tunnel such as ngrok or cloudflared and save the tunnel URL as your test webhook
 URL in the dashboard.
+
+## Hosted checkout page
+
+Every invoice also has a hosted checkout page at:
+
+```text
+https://pay.invoq.money/<invoice id>
+```
+
+Share the link or redirect to it when an in-page checkout modal is not a fit.
 
 ## Webhooks
 

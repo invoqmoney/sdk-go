@@ -94,8 +94,9 @@ func requestJSON[T any](
 	if !ok {
 		return nil, invalidResponseError("invoq API response did not include a data envelope.", nil, payload)
 	}
-	if data == nil {
-		return nil, invalidResponseError("invoq API response data envelope was null.", nil, payload)
+	// A non-object data is a broken envelope, not a resource that failed to parse.
+	if _, isObject := data.(map[string]any); !isObject {
+		return nil, invalidResponseError("invoq API response data envelope was not an object.", nil, payload)
 	}
 
 	dataBytes, err := json.Marshal(data)
@@ -141,6 +142,8 @@ func decodeJSON(value []byte) (any, error) {
 	return payload, nil
 }
 
+// PathEscape leaves `&`, `=` and `+` unescaped — RFC 3986-legal, but the JS and
+// other four SDKs escape them. Unreachable today: ids are Crockford base32.
 func buildRequestURL(baseURL *url.URL, pathSegments []string) *url.URL {
 	requestURL := *baseURL
 

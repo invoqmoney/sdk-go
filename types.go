@@ -111,7 +111,9 @@ const (
 	WebhookEventTypeInvoicePaymentReversed WebhookEventType = "invoice.payment_reversed"
 )
 
-// APIErrorLocation is the location of a field-level API error.
+// APIErrorLocation is the location of a field-level API error. The constants
+// below are the documented values; an unknown one is carried through verbatim,
+// so never assume exhaustiveness.
 type APIErrorLocation string
 
 const (
@@ -121,8 +123,6 @@ const (
 	APIErrorLocationPath APIErrorLocation = "path"
 	// APIErrorLocationBody indicates a request body error.
 	APIErrorLocationBody APIErrorLocation = "body"
-	// APIErrorLocationHeader indicates a request header error.
-	APIErrorLocationHeader APIErrorLocation = "header"
 )
 
 // APIErrorField is a field-level validation error returned by the invoq API.
@@ -160,7 +160,9 @@ type PaymentOption struct {
 	// belongs to this invoice alone, and any on-time transfer to it is credited.
 	DepositAddress *string `json:"deposit_address,omitempty"`
 	// SuggestedAmount is set on ready evm_deposit options only. It is guidance,
-	// not a matching requirement, and can exceed AmountDue by one token unit.
+	// not a matching requirement: rounded up to at most 6 digits (a person
+	// retypes it) and padded back to TokenDecimals, so it can exceed AmountDue
+	// by up to 0.000001.
 	SuggestedAmount *string `json:"suggested_amount,omitempty"`
 
 	// RecipientAddress is set on ready direct_exact options only. It is the

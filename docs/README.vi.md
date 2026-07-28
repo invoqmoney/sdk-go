@@ -8,6 +8,12 @@ SDK Go cho các API server của invoq và xác minh webhook. Tạo hóa đơn s
 
 Chỉ dùng module này trên máy chủ của bạn. Nó nhận khóa bí mật và không được biên dịch vào các ứng dụng phía client.
 
+**Đang code bằng AI? Dán câu này.**
+
+```
+Thêm thanh toán stablecoin vào dự án của tôi bằng invoq. Bắt đầu ở chế độ thử nghiệm. Đọc tài liệu trước khi viết code: https://invoq.money/llms.txt
+```
+
 ## SDK server
 
 Tạo hóa đơn và xác minh webhook từ backend của bạn bằng bất kỳ ngôn ngữ nào dưới đây — cùng REST API, cùng chữ ký webhook. Repo này là SDK Go.
@@ -155,6 +161,16 @@ _ = paidInvoice.Status // invoq.InvoiceStatusPaid khi đã thanh toán đủ
 `CreateTestPayment` chỉ dùng được với hóa đơn tạo bằng khóa `sk_test_`. Khi số tiền thanh toán đạt đủ giá trị hóa đơn, hóa đơn chuyển sang `paid` và invoq gửi một webhook `invoice.paid` có chữ ký thật đến URL webhook thử nghiệm của bạn. Có thể trả từng phần, hóa đơn sẽ thành `partially_paid`.
 
 Để nhận webhook trên máy của mình, hãy mở máy chủ local ra ngoài bằng một tunnel HTTPS như ngrok hay cloudflared, rồi lưu URL tunnel làm URL webhook thử nghiệm trong bảng điều khiển.
+
+## Trang thanh toán được lưu trữ sẵn
+
+Mỗi hóa đơn còn có một trang thanh toán được lưu trữ sẵn tại:
+
+```text
+https://pay.invoq.money/<id hóa đơn>
+```
+
+Cứ gửi link hoặc chuyển hướng sang đó khi cửa sổ thanh toán nhúng trong trang không phù hợp.
 
 ## Webhook
 

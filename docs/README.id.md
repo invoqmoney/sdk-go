@@ -8,6 +8,12 @@ SDK Go untuk API server invoq dan verifikasi webhook. Buat invoice stablecoin, s
 
 Gunakan modul ini hanya di server Anda. Modul ini menerima kunci rahasia dan tidak boleh dikompilasi ke dalam aplikasi sisi klien.
 
+**Coding pakai AI? Tempelkan ini.**
+
+```
+Tambahkan pembayaran stablecoin ke proyek saya dengan invoq. Mulai dari mode tes. Baca dokumentasinya sebelum menulis kode: https://invoq.money/llms.txt
+```
+
 ## SDK server
 
 Buat invoice dan verifikasi webhook dari backend Anda dalam bahasa mana pun berikut — REST API dan tanda tangan webhook-nya sama persis. Repo ini adalah SDK Go.
@@ -155,6 +161,16 @@ _ = paidInvoice.Status // invoq.InvoiceStatusPaid saat dibayar penuh
 `CreateTestPayment` hanya bekerja pada invoice yang dibuat dengan kunci `sk_test_`. Begitu pembayaran mencapai jumlah invoice, invoice menjadi `paid` dan invoq mengirim webhook `invoice.paid` bertanda tangan sungguhan ke URL webhook uji coba Anda. Jumlah parsial diperbolehkan dan menghasilkan `partially_paid`.
 
 Untuk menerima webhook di mesin Anda sendiri, buka server lokal lewat tunnel HTTPS seperti ngrok atau cloudflared, lalu simpan URL tunnel-nya sebagai URL webhook uji coba di dashboard.
+
+## Halaman checkout yang dihosting
+
+Setiap invoice juga punya halaman checkout yang di-host di:
+
+```text
+https://pay.invoq.money/<id invoice>
+```
+
+Bagikan tautannya atau alihkan ke sana kalau jendela checkout dalam halaman kurang pas.
 
 ## Webhook
 

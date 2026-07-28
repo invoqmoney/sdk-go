@@ -8,6 +8,12 @@
 
 這個模組只能在你的伺服器端使用。它需要私密金鑰，絕不能被編譯進用戶端應用程式中。
 
+**在用 AI 寫程式？把這段貼給它。**
+
+```
+用 invoq 幫我的專案串接穩定幣收款，從測試模式開始。寫程式前先讀文件 https://invoq.money/llms.txt
+```
+
 ## 伺服器端 SDK
 
 用下面任一種語言，都能從你的後端建立帳單、驗證 webhook——REST API 和 webhook 簽章完全一致。本倉庫是 Go SDK。
@@ -155,6 +161,16 @@ _ = paidInvoice.Status // 完全付清時為 invoq.InvoiceStatusPaid
 `CreateTestPayment` 只對 `sk_test_` 金鑰建立的帳單有效。累計付款達到帳單金額時，帳單變為 `paid`，invoq 會向你的測試 webhook URL 送出一條真實簽章的 `invoice.paid` webhook。也可以只付部分金額，帳單會變成 `partially_paid`。
 
 要在本機收 webhook，用 ngrok、cloudflared 之類的 HTTPS 隧道把本地伺服器公開出去，再把隧道網址存成商家後台裡的測試 webhook URL。
+
+## 託管結帳頁
+
+每張帳單都自帶一個託管結帳頁：
+
+```text
+https://pay.invoq.money/<帳單 id>
+```
+
+當頁內結帳彈窗不適合時，把連結分享出去或直接導向過去就行。
 
 ## Webhooks
 

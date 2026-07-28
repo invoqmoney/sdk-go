@@ -69,6 +69,12 @@ func New(apiKey string, options ...Option) (*Client, error) {
 		return nil, configurationError("invoq API key must be a non-empty string.")
 	}
 
+	// The transport refuses this as a connection error, which sends the caller to
+	// debug their network. Name it here, the same way every SDK does.
+	if strings.ContainsFunc(apiKey, func(r rune) bool { return r < 0x20 || r == 0x7F }) {
+		return nil, configurationError("invoq API key must not contain control characters.")
+	}
+
 	resolvedOptions := clientOptions{
 		apiOrigin:  DefaultAPIOrigin,
 		httpClient: defaultHTTPClient,
@@ -111,6 +117,16 @@ type Invoices struct {
 	clientOptions requestClientOptions
 }
 
+// Value receivers, so a dereferenced copy is covered too. fmt prints <nil> for a
+// nil pointer without calling these.
+func (invoices Invoices) String() string {
+	return "invoq.Invoices{apiOrigin: " + invoices.clientOptions.apiOrigin.String() + "}"
+}
+
+func (invoices Invoices) GoString() string {
+	return invoices.String()
+}
+
 // Create creates an invoice.
 func (invoices *Invoices) Create(ctx context.Context, input CreateInvoiceInput) (*Invoice, error) {
 	amount, err := requiredRequestString(input.Amount, "amount")
@@ -125,7 +141,7 @@ func (invoices *Invoices) Create(ctx context.Context, input CreateInvoiceInput) 
 
 // Get gets an invoice by ID.
 func (invoices *Invoices) Get(ctx context.Context, invoiceID string) (*PublicInvoice, error) {
-	id, err := requiredRequestString(invoiceID, "invoiceId")
+	id, err := requiredPathSegment(invoiceID, "invoiceId")
 	if err != nil {
 		return nil, err
 	}
@@ -135,7 +151,7 @@ func (invoices *Invoices) Get(ctx context.Context, invoiceID string) (*PublicInv
 
 // CreateTestPayment creates a test payment for a test invoice.
 func (invoices *Invoices) CreateTestPayment(ctx context.Context, invoiceID string, input CreateTestPaymentInput) (*TestPaymentInvoice, error) {
-	id, err := requiredRequestString(invoiceID, "invoiceId")
+	id, err := requiredPathSegment(invoiceID, "invoiceId")
 	if err != nil {
 		return nil, err
 	}
@@ -234,6 +250,21 @@ func isValidAPIOriginPort(value string) bool {
 
 	_, err := strconv.ParseUint(value, 10, 16)
 	return err == nil
+}
+
+// A URL resolver pops "." and "..", so an id of either would call a different
+// endpoint instead of 404ing. Percent-encoding is no help: normalization is first.
+func requiredPathSegment(value string, fieldName string) (string, error) {
+	segment, err := requiredRequestString(value, fieldName)
+	if err != nil {
+		return "", err
+	}
+
+	if segment == "." || segment == ".." {
+		return "", configurationError(fieldName + " must not be a path segment that resolves ('.' or '..').")
+	}
+
+	return segment, nil
 }
 
 func requiredRequestString(value string, fieldName string) (string, error) {
