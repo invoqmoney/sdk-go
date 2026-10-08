@@ -39,7 +39,7 @@ go get github.com/invoqmoney/sdk-go
 
 ## 获取密钥
 
-1. 登录 [invoq 商户后台](https://app.invoq.money)，创建一个项目。
+1. 登录 invoq 商户后台，创建一个项目。
 2. 在 **API keys** 页面创建一把密钥（secret key）。测试密钥以 `sk_test_` 开头，正式密钥以 `sk_live_` 开头；用哪种密钥，决定开出的账单是测试单还是正式单。
 3. 在项目的 **webhooks** 设置里保存你的 webhook URL。对应模式的 webhook 签名密钥（`whsec_...`）只在首次启用 webhook 时展示一次——记得马上存好。webhook URL 必须是公网可访问的 HTTPS 地址。
 4. 上线前先设置 **Receiving wallet**。测试账单不需要它；没有结算去向的正式账单会以 `409 no_payment_options_available` 失败。

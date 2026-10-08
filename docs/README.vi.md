@@ -39,7 +39,7 @@ Yêu cầu Go 1.22 trở lên.
 
 ## Lấy khóa API
 
-1. Đăng nhập [bảng điều khiển invoq](https://app.invoq.money) và tạo một dự án.
+1. Đăng nhập bảng điều khiển invoq và tạo một dự án.
 2. Ở trang **API keys**, tạo một khóa bí mật. Khóa thử nghiệm bắt đầu bằng `sk_test_`, khóa thật bằng `sk_live_`. Loại khóa quyết định hóa đơn tạo ra là thử nghiệm hay thật.
 3. Trong phần cài đặt **webhooks** của dự án, lưu URL webhook của bạn. Mã bí mật của webhook (`whsec_...`) cho chế độ đó chỉ hiện đúng một lần, lúc bạn bật webhook lần đầu — hãy lưu lại ngay. URL webhook phải là URL HTTPS truy cập công khai được.
 4. Thiết lập **Receiving wallet** của bạn trước khi lên live. Hóa đơn thử nghiệm không cần ví này; hóa đơn live không có nơi để tất toán sẽ lỗi `409 no_payment_options_available`.

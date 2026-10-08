@@ -39,7 +39,7 @@ Requiere Go 1.22 o más nuevo.
 
 ## Consigue tus claves
 
-1. Inicia sesión en el [panel de invoq](https://app.invoq.money) y crea un proyecto.
+1. Inicia sesión en el panel de invoq y crea un proyecto.
 2. En la página **API keys**, crea una clave secreta. Las claves de prueba empiezan con `sk_test_`, las claves de producción con `sk_live_`. El modo de la clave determina si las facturas son de prueba o de producción.
 3. En la configuración de **webhooks** de tu proyecto, guarda tu URL de webhook. El secreto del webhook (`whsec_...`) de ese modo se muestra una sola vez, cuando activas el webhook por primera vez — guárdalo de inmediato. La URL del webhook debe ser HTTPS y pública.
 4. Configura tu **Receiving wallet** antes de pasar a producción. Las facturas de prueba no la necesitan; una factura real sin destino de liquidación falla con `409 no_payment_options_available`.
